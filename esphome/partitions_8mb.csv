@@ -1,0 +1,10 @@
+# Custom partition table for XIAO ESP32-S3 Sense (8MB flash)
+# Single 7.5MB factory app slot to fit firmware + embedded ESP-DL YOLO11 model.
+# NOTE: no OTA slots — with a ~5-7MB firmware, dual app slots cannot fit in 8MB.
+# Flash over USB serial. If you later switch to a small FOMO/TFLite model
+# (<1MB), revert to ESPHome's default partition table to get OTA back.
+# Name,   Type, SubType,  Offset,   Size,     Flags
+nvs,      data, nvs,      0x9000,   0x6000,
+phy_init, data, phy,      0xf000,   0x1000,
+factory,  app,  factory,  0x10000,  0x780000,
+nvs_keys, data, nvs_keys, 0x790000, 0x1000,

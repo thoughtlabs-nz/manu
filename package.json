@@ -1,0 +1,17 @@
+{
+  "name": "bird-detection-service",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev:backend": "convex dev",
+    "codegen": "convex codegen",
+    "typecheck": "tsc -p convex --noEmit"
+  },
+  "dependencies": {
+    "convex": "^1.28.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "typescript": "^5.9.0"
+  }
+}

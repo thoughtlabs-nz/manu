@@ -1,0 +1,354 @@
+:root {
+  --paper: #f5efe3;
+  --paper-deep: #ede4d0;
+  --ink: #22301f;
+  --ink-soft: #57634f;
+  --rust: #b6501f;
+  --sage: #8a9b78;
+  --hairline: rgba(34, 48, 31, 0.22);
+  --shadow: 0 18px 40px -18px rgba(34, 48, 31, 0.35);
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--paper);
+}
+
+body {
+  font-family: "Fraunces", "Georgia", serif;
+  font-optical-sizing: auto;
+  color: var(--ink);
+  background:
+    radial-gradient(1200px 500px at 85% -10%, rgba(138, 155, 120, 0.18), transparent 65%),
+    radial-gradient(900px 420px at -10% 8%, rgba(182, 80, 31, 0.10), transparent 60%),
+    var(--paper);
+  min-height: 100vh;
+}
+
+.mono,
+.entry-no,
+.entry-when,
+.chip,
+.stat-label,
+.meter,
+.entry-note,
+.colophon,
+.loading,
+.tagline {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+/* paper grain */
+.grain {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.5;
+  z-index: 1;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 0.13 0 0 0 0 0.19 0 0 0 0 0.12 0 0 0 0.05 0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+.page {
+  position: relative;
+  z-index: 2;
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: clamp(1.2rem, 4vw, 3rem);
+}
+
+/* ---------------- masthead ---------------- */
+.masthead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1.6rem;
+  padding-bottom: 1.4rem;
+  border-bottom: 2px solid var(--ink);
+  animation: rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.masthead-brand {
+  display: flex;
+  align-items: flex-end;
+  gap: 1rem;
+}
+
+.bird-mark {
+  width: 52px;
+  color: var(--rust);
+  flex-shrink: 0;
+}
+
+.masthead h1 {
+  font-size: clamp(3rem, 8vw, 5.2rem);
+  font-weight: 640;
+  font-style: italic;
+  letter-spacing: -0.03em;
+  line-height: 0.9;
+}
+
+.tagline {
+  margin-top: 0.5rem;
+  font-size: 0.78rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.masthead-stats {
+  display: flex;
+  gap: 2.2rem;
+  align-items: baseline;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.stat-value {
+  font-size: 1.7rem;
+  font-weight: 560;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat-label {
+  font-size: 0.66rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.stat.live {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.live-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--rust);
+  animation: pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(182, 80, 31, 0.45); }
+  50% { box-shadow: 0 0 0 9px rgba(182, 80, 31, 0); }
+}
+
+/* ---------------- feed ---------------- */
+.feed {
+  margin-top: 2.4rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(310px, 1fr));
+  gap: 2.4rem 2rem;
+}
+
+.entry {
+  animation: rise 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+.entry-rule {
+  height: 2px;
+  background: var(--ink);
+  margin-bottom: 0.55rem;
+}
+
+.entry-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  margin-bottom: 0.9rem;
+}
+
+.entry-photo {
+  background: #fff;
+  padding: 10px 10px 12px;
+  box-shadow: var(--shadow);
+  transform: rotate(-0.6deg);
+  transition: transform 0.35s cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+
+.entry:nth-child(even) .entry-photo {
+  transform: rotate(0.7deg);
+}
+
+.entry:hover .entry-photo {
+  transform: rotate(0deg) translateY(-3px);
+}
+
+.entry-photo img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  filter: saturate(0.92) contrast(1.03);
+}
+
+.entry-photo-none {
+  aspect-ratio: 4 / 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.7rem;
+  background: var(--paper-deep);
+  color: var(--ink-soft);
+}
+
+.entry-photo-none .bird-mark {
+  width: 44px;
+  color: var(--sage);
+}
+
+.entry-photo-none span {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.entry-body {
+  padding: 1.1rem 0.2rem 0;
+}
+
+.entry-species {
+  font-size: 1.9rem;
+  font-weight: 580;
+  font-style: italic;
+  letter-spacing: -0.02em;
+  text-transform: capitalize;
+}
+
+.entry-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 0.6rem 0 0.5rem;
+}
+
+.chip {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  padding: 0.25rem 0.7rem;
+  color: var(--ink-soft);
+}
+
+.conf {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--rust);
+  font-variant-numeric: tabular-nums;
+}
+
+.conf small {
+  font-size: 0.75rem;
+  margin-left: 1px;
+}
+
+.meter {
+  height: 5px;
+  background: rgba(34, 48, 31, 0.12);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.meter-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--sage), var(--rust));
+  border-radius: inherit;
+  transition: width 0.6s ease;
+}
+
+.entry-note {
+  margin-top: 0.65rem;
+  font-size: 0.72rem;
+  color: var(--ink-soft);
+}
+
+/* ---------------- empty / loading ---------------- */
+.loading {
+  margin: 5rem auto;
+  text-align: center;
+  color: var(--ink-soft);
+  font-size: 0.85rem;
+  letter-spacing: 0.1em;
+}
+
+.empty {
+  max-width: 30rem;
+  margin: 5.5rem auto 4rem;
+  text-align: center;
+}
+
+.empty-branch {
+  height: 2px;
+  width: 120px;
+  margin: 0 auto 2rem;
+  background: var(--ink);
+  position: relative;
+}
+
+.empty-branch::after {
+  content: "";
+  position: absolute;
+  right: 26px;
+  bottom: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50% 50% 50% 0;
+  background: var(--rust);
+  transform: rotate(-45deg);
+}
+
+.empty h2 {
+  font-size: 2.1rem;
+  font-style: italic;
+  font-weight: 600;
+  margin-bottom: 0.8rem;
+}
+
+.empty p {
+  color: var(--ink-soft);
+  line-height: 1.65;
+  font-size: 1.02rem;
+}
+
+/* ---------------- colophon ---------------- */
+.colophon {
+  margin-top: 4.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--hairline);
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  color: var(--ink-soft);
+  text-align: center;
+}
+
+@media (max-width: 640px) {
+  .masthead-stats {
+    gap: 1.4rem;
+  }
+  .stat-value {
+    font-size: 1.3rem;
+  }
+}

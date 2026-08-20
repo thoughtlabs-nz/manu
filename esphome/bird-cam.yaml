@@ -1,0 +1,266 @@
+# ---------------------------------------------------------------------------
+# Bird detection camera — Seeed XIAO ESP32-S3 Sense
+#
+# On-device inference: ESP-DL YOLO11n (COCO 80 classes, includes "bird")
+# via the s3_vision external component. No model training required for v1.
+#
+# Detections are POSTed as JSON to a Convex HTTP action. An MQTT variant is
+# included (commented) at the bottom.
+#
+# Flash over USB serial: the custom 8MB partition table has a single large
+# app slot to fit the embedded model, so OTA is not available in this build.
+#   esphome run bird-cam.yaml --device /dev/cu.usbmodem*
+# ---------------------------------------------------------------------------
+
+substitutions:
+  name: bird-cam-1
+  friendly_name: Bird Camera 1
+  # Only report/post detections at or above this confidence
+  bird_min_confidence: "0.40"
+  # Minimum seconds between posted detections (cooldown)
+  detection_cooldown: 30s
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: seeed_xiao_esp32s3
+  flash_size: 8MB
+  partitions: partitions_8mb.csv
+  framework:
+    type: esp-idf
+    # YOLO inference on this board can hog a core for several seconds; give the
+    # watchdog headroom so the main loop being briefly starved isn't fatal.
+    sdkconfig_options:
+      CONFIG_ESP_TASK_WDT_TIMEOUT_S: "30"
+
+# 8MB octal PSRAM — required for the camera frame buffer and model tensors
+psram:
+  mode: octal
+  speed: 80MHz
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${name} Fallback"
+
+captive_portal:
+
+logger:
+  level: DEBUG
+
+# Native API kept for Home Assistant / esphome logs. reboot_timeout: 0s stops
+# the device rebooting every 15 min when no HA is connected (Convex-only use).
+api:
+  encryption:
+    key: !secret api_encryption_key
+  reboot_timeout: 0s
+
+time:
+  - platform: sntp
+    id: sntp_time
+
+http_request:
+  id: http_client
+  timeout: 10s
+
+# --- Camera (XIAO ESP32-S3 Sense / OV2640 pinout) --------------------------
+i2c:
+  - id: camera_i2c
+    sda: GPIO40
+    scl: GPIO39
+
+esp32_camera:
+  id: bird_camera
+  name: ${friendly_name}
+  external_clock:
+    pin: GPIO10
+    frequency: 20MHz
+  i2c_id: camera_i2c
+  data_pins: [GPIO15, GPIO17, GPIO18, GPIO16, GPIO14, GPIO12, GPIO11, GPIO48]
+  vsync_pin: GPIO38
+  href_pin: GPIO47
+  pixel_clock_pin: GPIO13
+  # s3_vision requires RGB565 raw frames in PSRAM; do NOT set jpeg_quality here
+  resolution: 320x240
+  pixel_format: RGB565
+  frame_buffer_count: 1
+  frame_buffer_location: PSRAM
+  idle_framerate: 0.05fps
+
+# NOTE: do NOT add esp32_camera_web_server here. Even one instance starves
+# the ESP-DL model of internal RAM -> bad_alloc abort -> boot loop.
+# To see what the camera sees, pull a frame over the native API instead
+# (scripts/snapshot.py in this repo).
+
+# --- On-device object detection (ESP-DL YOLO11 via s3_vision) ---------------
+external_components:
+  - source:
+      type: git
+      url: https://github.com/youkorr/s3_vision
+      ref: main
+    components: [vision]
+    refresh: 1d
+
+vision:
+  id: bird_vision
+  esp32_camera_id: bird_camera
+  model_family: coco_detect   # bundled YOLO11n, 80 COCO classes incl. "bird"
+  score_threshold: 0.30       # raw model gate; bird_min_confidence filters again
+  nms_threshold: 0.50
+  detection_interval_ms: 3000 # inference itself takes seconds on the XIAO; don't back them up
+  max_detections: 10
+  inference_task_stack_size: 8192
+  # Priority 1 = same as ESPHome's main loop task (both pinned to core 1), so
+  # they timeslice. At priority 5 the inference starves the loop -> task_wdt abort.
+  inference_task_priority: 1
+  frame_width: 320
+  frame_height: 240
+  jpeg_quality: 60
+  draw_boxes: true
+  # Fires on every inference. summary format: "label:score,label:score" or "none"
+  on_object_detected:
+    - then:
+        - lambda: |-
+            float conf = -1.0f;
+            size_t pos = summary.find("bird:");
+            while (pos != std::string::npos) {
+              if (pos == 0 || summary[pos - 1] == ',') {
+                conf = atof(summary.c_str() + pos + 5);
+                break;
+              }
+              pos = summary.find("bird:", pos + 1);
+            }
+            if (conf >= ${bird_min_confidence}) {
+              id(report_bird)->execute(conf, object_count);
+            }
+  # Fires when anything was detected; only upload while a bird report is active
+  on_detection_image:
+    - then:
+        - if:
+            condition:
+              and:
+                - binary_sensor.is_on: bird_detected
+                - switch.is_on: snapshot_uploads
+            then:
+              - http_request.post:
+                  url: !secret convex_snapshot_url
+                  request_headers:
+                    Content-Type: application/json
+                    Authorization: !secret detection_api_key
+                  json: |-
+                    root["device"] = App.get_name();
+                    root["ts"] = (long) id(sntp_time).utcnow().timestamp;
+                    root["image_b64"] = esphome::base64_encode(image.data, image.length);
+
+# --- Detection reporting ----------------------------------------------------
+script:
+  - id: report_bird
+    mode: single   # while running (cooldown), further detections are ignored
+    parameters:
+      confidence: float
+      count: int
+    then:
+      - sensor.template.publish:
+          id: bird_confidence
+          state: !lambda "return confidence;"
+      - binary_sensor.template.publish:
+          id: bird_detected
+          state: ON
+      - http_request.post:
+          url: !secret convex_ingest_url
+          request_headers:
+            Content-Type: application/json
+            Authorization: !secret detection_api_key
+          json: |-
+            root["device"] = App.get_name();
+            root["species"] = "bird";          // COCO class; species ID is server-side (v2)
+            root["confidence"] = confidence;
+            root["object_count"] = count;
+            root["ts"] = (long) id(sntp_time).utcnow().timestamp;
+          on_error:
+            - logger.log:
+                level: WARN
+                format: "Detection POST to Convex failed"
+      - delay: ${detection_cooldown}
+      - binary_sensor.template.publish:
+          id: bird_detected
+          state: OFF
+
+binary_sensor:
+  - platform: template
+    id: bird_detected
+    name: Bird Detected
+    device_class: occupancy
+
+sensor:
+  - platform: template
+    id: bird_confidence
+    name: Bird Confidence
+    accuracy_decimals: 2
+    state_class: measurement
+  - platform: wifi_signal
+    name: WiFi Signal
+    update_interval: 60s
+  - platform: uptime
+    name: Uptime
+
+switch:
+  - platform: template
+    id: detection_enabled
+    name: Detection Enabled
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    turn_on_action:
+      - vision.start:
+          id: bird_vision
+    turn_off_action:
+      - vision.stop:
+          id: bird_vision
+  - platform: template
+    id: snapshot_uploads
+    name: Snapshot Uploads
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+
+button:
+  - platform: template
+    name: Run Inference Now
+    on_press:
+      - vision.inference:
+          id: bird_vision
+  - platform: restart
+    name: Restart
+
+# XIAO ESP32-S3 user LED (inverted): lit while a detection is being reported
+light:
+  - platform: status_led
+    id: user_led
+    pin:
+      number: GPIO21
+      inverted: true
+    internal: true
+
+# --- MQTT alternative -------------------------------------------------------
+# If you prefer a broker over direct Convex ingestion, enable this block and
+# replace the http_request.post in report_bird with the mqtt.publish_json
+# below. MQTT gives you QoS/retain and a free liveness signal (birth/LWT on
+# <name>/status). The api: block can stay; both coexist.
+#
+# mqtt:
+#   broker: !secret mqtt_broker
+#   username: !secret mqtt_username
+#   password: !secret mqtt_password
+#
+# # in report_bird, instead of http_request.post:
+# #   - mqtt.publish_json:
+# #       topic: birdcam/${name}/detection
+# #       qos: 1
+# #       payload: |-
+# #         root["device"] = App.get_name();
+# #         root["species"] = "bird";
+# #         root["confidence"] = confidence;
+# #         root["object_count"] = count;
+# #         root["ts"] = (long) id(sntp_time).utcnow().timestamp;
