@@ -15,10 +15,38 @@ Respond with ONLY a JSON object, no other text, no markdown fences:
   "commonName": string,        // best-guess common species name, or "Unknown bird" if you genuinely cannot tell
   "scientificName": string|null,
   "confidence": number,        // 0 to 1, your honest confidence in commonName
-  "note": string|null          // one short clause on distinguishing features, or why you're unsure
+  "note": string|null          // under 10 words on distinguishing features, or why you're unsure
 }
 
 If the image does not clearly show a bird at all, set commonName to "Unknown bird" and confidence to 0.`;
+
+// Some models (or a too-small max_tokens) truncate before the closing
+// brace. Try a full JSON.parse first; if that fails, pull fields out
+// individually so a truncated-but-otherwise-good answer isn't thrown away.
+function extractSpeciesFields(text: string): {
+  commonName: string;
+  scientificName?: string;
+  confidence?: number;
+} | null {
+  const objMatch = text.match(/\{[\s\S]*\}/);
+  if (objMatch) {
+    try {
+      const parsed = JSON.parse(objMatch[0]);
+      if (typeof parsed.commonName === "string") return parsed;
+    } catch {
+      // fall through to field-by-field extraction below
+    }
+  }
+  const commonName = text.match(/"commonName"\s*:\s*"([^"]*)"/)?.[1];
+  if (!commonName) return null;
+  const scientificName = text.match(/"scientificName"\s*:\s*"([^"]*)"/)?.[1];
+  const confidenceStr = text.match(/"confidence"\s*:\s*([0-9.]+)/)?.[1];
+  return {
+    commonName,
+    scientificName,
+    confidence: confidenceStr ? Number(confidenceStr) : undefined,
+  };
+}
 
 async function blobToBase64(blob: Blob): Promise<string> {
   const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -67,7 +95,7 @@ export const identify = internalAction({
         body: JSON.stringify({
           model,
           temperature: 0.2,
-          max_tokens: 300,
+          max_tokens: 500,
           messages: [
             {
               role: "user",
@@ -94,9 +122,8 @@ export const identify = internalAction({
 
       const data = await res.json();
       const text: string = data.choices?.[0]?.message?.content ?? "";
-      const match = text.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error(`no JSON in model response: ${text}`);
-      const parsed = JSON.parse(match[0]);
+      const parsed = extractSpeciesFields(text);
+      if (!parsed) throw new Error(`no usable species data in model response: ${text}`);
 
       await ctx.runMutation(internal.species.recordResult, {
         detectionId,

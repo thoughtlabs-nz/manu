@@ -1,6 +1,10 @@
+import { useMemo, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import TestUpload from "./TestUpload";
+import Calendar from "./Calendar";
+import Reports from "./Reports";
+import { dayBoundsMs, formatDayKey, localDayKey } from "./dateUtils";
 
 type Detection = NonNullable<
   ReturnType<typeof useQuery<typeof api.detections.recent>>
@@ -27,14 +31,21 @@ function absoluteTime(ms: number): string {
   });
 }
 
+// A pīwakawaka (fantail) — its fanned tail is the clearest "this is a bird"
+// silhouette at small sizes, and it's the bird that keeps showing up in the
+// test photos, so it fits.
 function BirdMark() {
   return (
-    <svg viewBox="0 0 48 40" className="bird-mark" aria-hidden="true">
-      <path
-        d="M4 30 C10 14 22 8 34 10 C36 6 40 4 44 5 C42 8 41 10 41 13 C41 24 30 33 18 33 L8 33 L14 38 L6 37 Z"
-        fill="currentColor"
-      />
-      <circle cx="38.5" cy="9.5" r="1.4" fill="var(--paper)" />
+    <svg viewBox="0 0 64 48" className="bird-mark" aria-hidden="true">
+      <g stroke="currentColor" strokeLinecap="round" fill="none">
+        <path d="M21 27 L3 31 M21 27 L4 19 M21 27 L9 9 M21 27 L17 4 M21 27 L25 6" strokeWidth="4" />
+        <path d="M10 42 L52 42" strokeWidth="2" />
+        <path d="M32 34 L30 42 M38 34 L39 42" strokeWidth="1.6" />
+      </g>
+      <ellipse cx="36" cy="26" rx="13" ry="10" fill="currentColor" />
+      <circle cx="49" cy="17" r="7" fill="currentColor" />
+      <polygon points="55,17 61,19 55,21" fill="currentColor" />
+      <circle cx="50.5" cy="15" r="1.3" fill="var(--paper)" />
     </svg>
   );
 }
@@ -122,9 +133,36 @@ function Entry({ d, index }: { d: Detection; index: number }) {
 }
 
 export default function App() {
-  const detections = useQuery(api.detections.recent, { limit: 50 });
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
+  const [sortOrder, setSortOrder] = useState<"newest" | "oldest">("newest");
+
+  const recentDetections = useQuery(api.detections.recent, { limit: 50 });
+  const dayBounds = selectedDay ? dayBoundsMs(selectedDay) : null;
+  const dayDetections = useQuery(
+    api.detections.byDay,
+    dayBounds ? dayBounds : "skip"
+  );
+  const summaryRows = useQuery(api.detections.summary, {});
   const stats = useQuery(api.detections.stats, {});
-  const loading = detections === undefined;
+
+  const activeDetections = selectedDay ? dayDetections : recentDetections;
+  const loading = activeDetections === undefined;
+
+  const sortedDetections = useMemo(() => {
+    if (!activeDetections) return undefined;
+    return sortOrder === "newest"
+      ? activeDetections
+      : [...activeDetections].reverse();
+  }, [activeDetections, sortOrder]);
+
+  const dayCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const r of summaryRows ?? []) {
+      const key = localDayKey(r.receivedAt);
+      counts[key] = (counts[key] ?? 0) + 1;
+    }
+    return counts;
+  }, [summaryRows]);
 
   return (
     <div className="page">
@@ -163,14 +201,43 @@ export default function App() {
 
       <TestUpload />
 
+      <section className="logbook">
+        <Calendar counts={dayCounts} selected={selectedDay} onSelect={setSelectedDay} />
+        <Reports rows={summaryRows ?? []} />
+      </section>
+
+      <div className="feed-toolbar">
+        {selectedDay ? (
+          <span className="feed-filter">
+            Showing <strong>{formatDayKey(selectedDay)}</strong>
+            <button type="button" className="feed-filter-clear" onClick={() => setSelectedDay(null)}>
+              clear ×
+            </button>
+          </span>
+        ) : (
+          <span className="feed-filter muted">Showing the most recent 50 sightings</span>
+        )}
+        <button
+          type="button"
+          className="sort-toggle"
+          onClick={() => setSortOrder((s) => (s === "newest" ? "oldest" : "newest"))}
+        >
+          {sortOrder === "newest" ? "newest first" : "oldest first"} ⇅
+        </button>
+      </div>
+
       <main>
-        {loading ? (
+        {loading || !sortedDetections ? (
           <p className="loading">consulting the log…</p>
-        ) : detections.length === 0 ? (
-          <EmptyPerch />
+        ) : sortedDetections.length === 0 ? (
+          selectedDay ? (
+            <p className="loading">no sightings on {formatDayKey(selectedDay)}.</p>
+          ) : (
+            <EmptyPerch />
+          )
         ) : (
           <section className="feed">
-            {detections.map((d, i) => (
+            {sortedDetections.map((d, i) => (
               <Entry key={d._id} d={d} index={i} />
             ))}
           </section>
