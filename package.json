@@ -2,10 +2,12 @@
   "name": "bird-detection-service",
   "private": true,
   "version": "0.1.0",
+  "workspaces": ["web"],
   "scripts": {
     "dev:backend": "convex dev",
     "codegen": "convex codegen",
-    "typecheck": "tsc -p convex --noEmit"
+    "typecheck": "tsc -p convex --noEmit",
+    "build:web": "npm run build --workspace=web"
   },
   "dependencies": {
     "convex": "^1.28.0"
