@@ -13,6 +13,13 @@ export default defineSchema({
     // Server receive time (epoch ms) — authoritative timestamp
     receivedAt: v.number(),
     snapshotId: v.optional(v.id("snapshots")),
+    // Server-side species ID (v3), run once a snapshot links to this detection
+    speciesStatus: v.optional(
+      v.union(v.literal("pending"), v.literal("done"), v.literal("failed"))
+    ),
+    speciesCommonName: v.optional(v.string()),
+    speciesScientificName: v.optional(v.string()),
+    speciesConfidence: v.optional(v.number()),
   })
     .index("by_receivedAt", ["receivedAt"])
     .index("by_device", ["device", "receivedAt"]),

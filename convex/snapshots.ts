@@ -1,5 +1,6 @@
 import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 
 // The device POSTs the detection first, then the snapshot moments later.
 // Link the snapshot to the most recent unlinked detection from the same
@@ -28,8 +29,12 @@ export const ingest = internalMutation({
       .take(10);
     const target = candidates.find((d) => d.snapshotId === undefined);
     if (target) {
-      await ctx.db.patch(target._id, { snapshotId });
+      await ctx.db.patch(target._id, { snapshotId, speciesStatus: "pending" });
       await ctx.db.patch(snapshotId, { detectionId: target._id });
+      await ctx.scheduler.runAfter(0, internal.species.identify, {
+        detectionId: target._id,
+        storageId: args.storageId,
+      });
     }
 
     return snapshotId;

@@ -1,5 +1,6 @@
 import { useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
+import TestUpload from "./TestUpload";
 
 type Detection = NonNullable<
   ReturnType<typeof useQuery<typeof api.detections.recent>>
@@ -87,7 +88,20 @@ function Entry({ d, index }: { d: Detection; index: number }) {
         )}
       </figure>
       <div className="entry-body">
-        <h3 className="entry-species">{d.species}</h3>
+        <h3 className="entry-species">
+          {d.speciesStatus === "done" && d.speciesCommonName
+            ? d.speciesCommonName
+            : d.species}
+        </h3>
+        {d.speciesStatus === "done" && d.speciesScientificName ? (
+          <p className="entry-scientific">{d.speciesScientificName}</p>
+        ) : null}
+        {d.speciesStatus === "pending" ? (
+          <p className="entry-identifying">
+            <span className="live-dot" />
+            identifying species
+          </p>
+        ) : null}
         <div className="entry-meta">
           <span className="chip">{d.device}</span>
           <span className="conf">
@@ -146,6 +160,8 @@ export default function App() {
           </div>
         </div>
       </header>
+
+      <TestUpload />
 
       <main>
         {loading ? (

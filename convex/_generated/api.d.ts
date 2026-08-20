@@ -11,6 +11,8 @@
 import type * as detections from "../detections.js";
 import type * as http from "../http.js";
 import type * as snapshots from "../snapshots.js";
+import type * as species from "../species.js";
+import type * as testUpload from "../testUpload.js";
 
 import type {
   ApiFromModules,
@@ -22,6 +24,8 @@ declare const fullApi: ApiFromModules<{
   detections: typeof detections;
   http: typeof http;
   snapshots: typeof snapshots;
+  species: typeof species;
+  testUpload: typeof testUpload;
 }>;
 
 /**
