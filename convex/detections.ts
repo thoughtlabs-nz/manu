@@ -1,4 +1,4 @@
-import { internalMutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
@@ -75,6 +75,26 @@ export const summary = query({
       speciesCommonName: d.speciesCommonName,
       speciesStatus: d.speciesStatus,
     }));
+  },
+});
+
+// Deletes a detection and its linked snapshot (both the DB row and the
+// stored file). No auth on this app yet — the press-and-hold gesture on the
+// client is protection against accidental taps, not against a stranger with
+// the URL; same caveat as testUpload.
+export const remove = mutation({
+  args: { detectionId: v.id("detections") },
+  handler: async (ctx, { detectionId }) => {
+    const detection = await ctx.db.get(detectionId);
+    if (!detection) return;
+    if (detection.snapshotId) {
+      const snapshot = await ctx.db.get(detection.snapshotId);
+      if (snapshot) {
+        await ctx.storage.delete(snapshot.storageId);
+        await ctx.db.delete(snapshot._id);
+      }
+    }
+    await ctx.db.delete(detectionId);
   },
 });
 

@@ -544,11 +544,53 @@ body {
 }
 
 .entry-photo {
+  position: relative;
   background: #fff;
   padding: 10px 10px 12px;
   box-shadow: var(--shadow);
   transform: rotate(-0.6deg);
   transition: transform 0.35s cubic-bezier(0.2, 0.7, 0.2, 1);
+  touch-action: pan-y;
+  user-select: none;
+  cursor: pointer;
+}
+
+.delete-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(34, 48, 31, 0.6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  color: var(--paper);
+  pointer-events: none;
+}
+
+.delete-ring {
+  width: 44px;
+  height: 44px;
+}
+
+.delete-ring-track {
+  fill: none;
+  stroke: rgba(245, 239, 227, 0.35);
+  stroke-width: 3;
+}
+
+.delete-ring-fill {
+  fill: none;
+  stroke: var(--rust);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+
+.delete-label {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .entry:nth-child(even) .entry-photo {

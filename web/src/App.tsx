@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
-import { useQuery } from "convex/react";
+import { useMemo, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import TestUpload from "./TestUpload";
 import Calendar from "./Calendar";
@@ -78,7 +79,82 @@ function ConfidenceMeter({ value }: { value: number }) {
   );
 }
 
+const HOLD_MS = 1400;
+const MOVE_CANCEL_PX = 12;
+
+function DeleteRing({ progress }: { progress: number }) {
+  const r = 16;
+  const c = 2 * Math.PI * r;
+  return (
+    <svg viewBox="0 0 40 40" className="delete-ring" aria-hidden="true">
+      <circle cx="20" cy="20" r={r} className="delete-ring-track" />
+      <circle
+        cx="20"
+        cy="20"
+        r={r}
+        className="delete-ring-fill"
+        transform="rotate(-90 20 20)"
+        style={{ strokeDasharray: c, strokeDashoffset: c * (1 - progress) }}
+      />
+    </svg>
+  );
+}
+
 function Entry({ d, index }: { d: Detection; index: number }) {
+  const removeDetection = useMutation(api.detections.remove);
+  const [holding, setHolding] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const rafRef = useRef<number | null>(null);
+  const startRef = useRef<{ t: number; x: number; y: number } | null>(null);
+  const deletingRef = useRef(false);
+
+  function cancelHold() {
+    if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
+    startRef.current = null;
+    setHolding(false);
+    setProgress(0);
+  }
+
+  function tick() {
+    if (!startRef.current || deletingRef.current) return;
+    const p = Math.min((performance.now() - startRef.current.t) / HOLD_MS, 1);
+    setProgress(p);
+    if (p >= 1) {
+      deletingRef.current = true;
+      removeDetection({ detectionId: d._id }).catch(() => {
+        deletingRef.current = false;
+        cancelHold();
+      });
+      return;
+    }
+    rafRef.current = requestAnimationFrame(tick);
+  }
+
+  function handlePointerDown(e: ReactPointerEvent<HTMLElement>) {
+    if (e.pointerType === "mouse" && e.button !== 0) return;
+    if (deletingRef.current) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    startRef.current = { t: performance.now(), x: e.clientX, y: e.clientY };
+    setHolding(true);
+    setProgress(0);
+    rafRef.current = requestAnimationFrame(tick);
+  }
+
+  function handlePointerMove(e: ReactPointerEvent<HTMLElement>) {
+    if (!startRef.current) return;
+    const dx = e.clientX - startRef.current.x;
+    const dy = e.clientY - startRef.current.y;
+    if (Math.hypot(dx, dy) > MOVE_CANCEL_PX) cancelHold();
+  }
+
+  function handlePointerUp(e: ReactPointerEvent<HTMLElement>) {
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+    if (!deletingRef.current) cancelHold();
+  }
+
   return (
     <article className="entry" style={{ animationDelay: `${index * 60}ms` }}>
       <div className="entry-rule" />
@@ -88,13 +164,30 @@ function Entry({ d, index }: { d: Detection; index: number }) {
           {relativeTime(d.receivedAt)}
         </span>
       </div>
-      <figure className="entry-photo">
+      <figure
+        className="entry-photo"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+      >
         {d.snapshotUrl ? (
-          <img src={d.snapshotUrl} alt={`${d.species} sighting`} loading="lazy" />
+          <img
+            src={d.snapshotUrl}
+            alt={`${d.species} sighting`}
+            loading="lazy"
+            draggable={false}
+          />
         ) : (
           <div className="entry-photo-none">
             <BirdMark />
             <span>no portrait captured</span>
+          </div>
+        )}
+        {holding && (
+          <div className="delete-overlay">
+            <DeleteRing progress={progress} />
+            <span className="delete-label">hold to delete</span>
           </div>
         )}
       </figure>
