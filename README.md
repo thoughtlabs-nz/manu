@@ -145,6 +145,38 @@ resize/colour-convert path (using this component's scalar conversion stubs)
 scales with frame width and overran the inference task stack. **32768** fixes
 it. If you raise the resolution further, raise the stack first.
 
+## Capture mode (collecting training data)
+
+The v2 model is weak (AP50 ~0.17) because it was trained on COCO's bird subset:
+assorted birds worldwide, mostly distant. This camera is fixed, pointed at one
+NZ garden at feeder distance — a severe domain mismatch no amount of retraining
+on COCO will fix. Capture mode collects in-domain data instead.
+
+Turn on **Capture Mode** on the control page. While it is on:
+
+- every frame is uploaded (throttled by **Capture Interval**, default 10s) to
+  the `captures` table — raw training data, never linked to a detection;
+- **detection reporting is suppressed**, so a collection run does not flood
+  `detections` or spend money on species ID for thousands of unlabelled frames.
+
+Then pull the set down and label it:
+
+```bash
+python3 scripts/fetch_captures.py --out captures/
+# label as ONE class, "bird" — species ID is server-side, so the on-device
+# model never needs to know species. Export YOLO format.
+# retrain per training/README.md, gate with training/test_model.py, then OTA.
+npx convex run captures:clear '{"confirm":"yes-delete-all-captures"}'
+```
+
+**Known sampling bias:** the component only encodes a JPEG when the model
+produced at least one raw box (`vision_component.cpp`: `if (!dets.empty())`),
+so a completely featureless frame is never captured. In practice that is
+useful — the frames you get are the ones the model reacts to, which is exactly
+the false-positive material worth labelling — but the set is not a uniform
+sample of the scene. Budget: ~40KB/frame, 5000-capture backend cap (~14 hours
+at the default interval).
+
 ## Remote / dashboard builds (ESPHome Device Builder)
 
 Two things break when the build is offloaded to a remote builder:

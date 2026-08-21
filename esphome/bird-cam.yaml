@@ -146,9 +146,19 @@ web_server:
     - id: group_orientation
       name: "Orientation"
       sorting_weight: 40
+    - id: group_capture
+      name: "Training Capture"
+      sorting_weight: 45
     - id: group_diagnostic
       name: "Diagnostics"
       sorting_weight: 50
+
+globals:
+  # millis() of the last capture upload, for throttling capture mode.
+  - id: last_capture_ms
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
 
 time:
   - platform: sntp
@@ -295,13 +305,53 @@ vision:
               if (comma == std::string::npos) break;
               pos = comma + 1;
             }
-            if (conf >= id(min_confidence).state) {
+            // While capturing training data we deliberately do NOT report:
+            // a collection run would otherwise flood the detections table and
+            // spend money on species ID for thousands of unlabelled frames.
+            if (!id(capture_mode).state && conf >= id(min_confidence).state) {
               id(report_bird)->execute(conf, object_count);
             }
 
   # Fires when anything was detected; only upload while a bird report is active
   on_detection_image:
     - then:
+        # --- Capture mode: bulk training-data collection --------------------
+        # Uploads frames regardless of confidence or cooldown, throttled by
+        # Capture Interval. Goes to the `captures` table (X-Capture: 1), which
+        # never links to a detection and never triggers the paid species-ID
+        # pass. NOTE: this trigger only fires when the model produced at least
+        # one raw box (score_threshold), so a totally featureless frame is
+        # never captured — the set is biased toward frames the model reacts to,
+        # which is exactly the false-positive material worth labelling.
+        - if:
+            condition:
+              lambda: |-
+                if (!id(capture_mode).state) return false;
+                uint32_t now = millis();
+                uint32_t gap = (uint32_t)(id(capture_interval).state * 1000.0f);
+                if (id(last_capture_ms) != 0 && (now - id(last_capture_ms)) < gap) return false;
+                id(last_capture_ms) = now;
+                return true;
+            then:
+              - http_request.post:
+                  url: !secret convex_snapshot_url
+                  request_headers:
+                    Content-Type: image/jpeg
+                    Authorization: !secret detection_api_key
+                    X-Capture: "1"
+                    X-Device: !lambda "return App.get_name().c_str();"
+                    X-Timestamp: !lambda |-
+                      static char cap_ts[16];
+                      snprintf(cap_ts, sizeof(cap_ts), "%ld",
+                               (long) id(sntp_time).utcnow().timestamp);
+                      return cap_ts;
+                  body: !lambda |-
+                    return std::string(reinterpret_cast<const char *>(image.data), image.length);
+                  on_error:
+                    - logger.log:
+                        level: WARN
+                        format: "Capture POST failed (storage full?)"
+        # --- Normal detection snapshot --------------------------------------
         - if:
             condition:
               and:
@@ -454,6 +504,25 @@ number:
     web_server:
       sorting_group_id: group_detection
       sorting_weight: 3
+
+  # Seconds between capture-mode uploads. At ~40KB/frame, 10s is ~14MB/hour
+  # and stays under the backend's 5000-capture cap for about 14 hours.
+  - platform: template
+    id: capture_interval
+    name: Capture Interval
+    icon: mdi:timer-outline
+    unit_of_measurement: s
+    optimistic: true
+    restore_value: true
+    initial_value: 10
+    min_value: 1
+    max_value: 120
+    step: 1
+    mode: box
+    entity_category: config
+    web_server:
+      sorting_group_id: group_capture
+      sorting_weight: 2
 
   - platform: template
     id: cam_brightness
@@ -665,6 +734,18 @@ switch:
     web_server:
       sorting_group_id: group_detection
       sorting_weight: 5
+
+  # Training-data collection. While ON, detections are NOT reported to Convex
+  # and no species ID runs — frames go to the `captures` table instead.
+  - platform: template
+    id: capture_mode
+    name: Capture Mode
+    icon: mdi:camera-burst
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    web_server:
+      sorting_group_id: group_capture
+      sorting_weight: 1
 
   - platform: template
     id: cam_vertical_flip

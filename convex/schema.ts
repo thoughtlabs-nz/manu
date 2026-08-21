@@ -24,6 +24,17 @@ export default defineSchema({
     .index("by_receivedAt", ["receivedAt"])
     .index("by_device", ["device", "receivedAt"]),
 
+  // Raw training-data frames from capture mode. Deliberately NOT the same
+  // table as snapshots: these are unlabelled bulk frames, must never be linked
+  // to a detection, and must never trigger the (paid) species-ID pass.
+  captures: defineTable({
+    device: v.string(),
+    deviceTs: v.number(),
+    receivedAt: v.number(),
+    storageId: v.id("_storage"),
+    bytes: v.number(),
+  }).index("by_receivedAt", ["receivedAt"]),
+
   snapshots: defineTable({
     device: v.string(),
     deviceTs: v.number(),

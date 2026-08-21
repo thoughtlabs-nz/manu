@@ -68,6 +68,12 @@ http.route({
 //     bytes also avoid base64's 33% overhead on a constrained uplink.
 //
 //  2. JSON { device, ts, image_b64 } — kept for curl/manual testing.
+//
+// `X-Capture: 1` diverts the frame to the `captures` table instead: raw
+// unlabelled training data, never linked to a detection and never sent to the
+// (paid) species-ID pass. It reuses this route rather than adding /captures so
+// no new secret URL is needed on every builder — the ESPHome secrets file on
+// the Home Assistant side is not always reachable.
 const MAX_SNAPSHOT_BYTES = 2 * 1024 * 1024;
 
 http.route({
@@ -146,6 +152,26 @@ http.route({
     const storageId = await ctx.storage.store(
       new Blob([buffer], { type: "image/jpeg" })
     );
+
+    if (request.headers.get("X-Capture") === "1") {
+      try {
+        const id = await ctx.runMutation(internal.captures.ingest, {
+          device,
+          deviceTs,
+          storageId,
+          bytes: buffer.byteLength,
+        });
+        return Response.json({ ok: true, capture: true, id });
+      } catch (err) {
+        // Storage already holds the blob; drop it so a refused capture does
+        // not leak an orphaned file.
+        await ctx.storage.delete(storageId);
+        return new Response(
+          err instanceof Error ? err.message : "Capture rejected",
+          { status: 507 }
+        );
+      }
+    }
 
     const id = await ctx.runMutation(internal.snapshots.ingest, {
       device,
