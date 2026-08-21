@@ -125,11 +125,29 @@ export const identify = internalAction({
       const data = await res.json();
       const text: string = data.choices?.[0]?.message?.content ?? "";
       const parsed = extractSpeciesFields(text);
+
+      // Record spend BEFORE the parse can throw: OpenRouter bills for the
+      // call whether or not we could read the answer, so accounting must not
+      // depend on parsing succeeding. Cost is returned automatically in
+      // `usage.cost` (USD charged); no request parameter is needed.
+      const usage = data.usage ?? {};
+      const cost = typeof usage.cost === "number" ? usage.cost : 0;
+      await ctx.runMutation(internal.species.recordUsage, {
+        detectionId,
+        model: typeof data.model === "string" ? data.model : model,
+        promptTokens: usage.prompt_tokens ?? 0,
+        completionTokens: usage.completion_tokens ?? 0,
+        totalTokens: usage.total_tokens ?? 0,
+        cost,
+        status: parsed ? "done" : "failed",
+      });
+
       if (!parsed) throw new Error(`no usable species data in model response: ${text}`);
 
       await ctx.runMutation(internal.species.recordResult, {
         detectionId,
         status: "done",
+        cost,
         commonName:
           typeof parsed.commonName === "string" ? parsed.commonName : "Unknown bird",
         scientificName:
@@ -154,8 +172,9 @@ export const recordResult = internalMutation({
     commonName: v.optional(v.string()),
     scientificName: v.optional(v.string()),
     confidence: v.optional(v.number()),
+    cost: v.optional(v.number()),
   },
-  handler: async (ctx, { detectionId, status, commonName, scientificName, confidence }) => {
+  handler: async (ctx, { detectionId, status, commonName, scientificName, confidence, cost }) => {
     const existing = await ctx.db.get(detectionId);
     if (!existing) return; // detection could theoretically be gone by the time this lands
     await ctx.db.patch(detectionId, {
@@ -163,6 +182,22 @@ export const recordResult = internalMutation({
       ...(commonName !== undefined ? { speciesCommonName: commonName } : {}),
       ...(scientificName !== undefined ? { speciesScientificName: scientificName } : {}),
       ...(confidence !== undefined ? { speciesConfidence: confidence } : {}),
+      ...(cost !== undefined ? { speciesCost: cost } : {}),
     });
+  },
+});
+
+export const recordUsage = internalMutation({
+  args: {
+    detectionId: v.optional(v.id("detections")),
+    model: v.string(),
+    promptTokens: v.number(),
+    completionTokens: v.number(),
+    totalTokens: v.number(),
+    cost: v.number(),
+    status: v.union(v.literal("done"), v.literal("failed")),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.insert("llmUsage", { ...args, createdAt: Date.now() });
   },
 });

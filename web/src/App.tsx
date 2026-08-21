@@ -22,6 +22,15 @@ function relativeTime(ms: number): string {
   return `${days} day${days > 1 ? "s" : ""} ago`;
 }
 
+// Species-ID calls cost fractions of a cent, so a plain toFixed(2) would show
+// every sighting as "$0.00". Scale the precision to the magnitude instead.
+function money(usd: number): string {
+  if (usd === 0) return "$0";
+  if (usd < 0.01) return `$${usd.toFixed(4)}`;
+  if (usd < 1) return `$${usd.toFixed(3)}`;
+  return `$${usd.toFixed(2)}`;
+}
+
 function absoluteTime(ms: number): string {
   return new Date(ms).toLocaleString(undefined, {
     weekday: "short",
@@ -212,6 +221,11 @@ function Entry({ d, index }: { d: Detection; index: number }) {
             {(d.confidence * 100).toFixed(0)}
             <small>%</small>
           </span>
+          {typeof d.speciesCost === "number" && d.speciesCost > 0 ? (
+            <span className="chip cost" title="OpenRouter charge to identify this sighting">
+              {money(d.speciesCost)}
+            </span>
+          ) : null}
         </div>
         <ConfidenceMeter value={d.confidence} />
         <p className="entry-note">
@@ -237,6 +251,7 @@ export default function App() {
   );
   const summaryRows = useQuery(api.detections.summary, {});
   const stats = useQuery(api.detections.stats, {});
+  const llm = useQuery(api.llmUsage.summary, {});
 
   const activeDetections = selectedDay ? dayDetections : recentDetections;
   const loading = activeDetections === undefined;
@@ -284,6 +299,25 @@ export default function App() {
               {stats?.latestAt ? relativeTime(stats.latestAt) : "—"}
             </span>
             <span className="stat-label">last sighting</span>
+          </div>
+          <div
+            className="stat"
+            title={
+              llm
+                ? `${llm.last24h.calls} species-ID calls in 24h · ` +
+                  `30d ${money(llm.last30d.cost)} · ` +
+                  `all time ${money(llm.allTime.cost)}${llm.allTime.capped ? "+" : ""} · ` +
+                  `avg ${money(llm.avgCostPerCall)}/call` +
+                  (llm.wasted.calls
+                    ? ` · ${llm.wasted.calls} billed but unusable (${money(llm.wasted.cost)})`
+                    : "")
+                : undefined
+            }
+          >
+            <span className="stat-value">
+              {llm ? money(llm.last24h.cost) : "—"}
+            </span>
+            <span className="stat-label">species ID / 24h</span>
           </div>
           <div className="stat live">
             <span className="live-dot" />

@@ -20,9 +20,26 @@ export default defineSchema({
     speciesCommonName: v.optional(v.string()),
     speciesScientificName: v.optional(v.string()),
     speciesConfidence: v.optional(v.number()),
+    // USD charged for this sighting's species ID, for per-entry display.
+    speciesCost: v.optional(v.number()),
   })
     .index("by_receivedAt", ["receivedAt"])
     .index("by_device", ["device", "receivedAt"]),
+
+  // One row per OpenRouter call. Separate from detections so that calls which
+  // succeed upstream but fail to parse — which are still billed — are counted,
+  // and so cost history survives a detection being deleted.
+  llmUsage: defineTable({
+    detectionId: v.optional(v.id("detections")),
+    model: v.string(),
+    promptTokens: v.number(),
+    completionTokens: v.number(),
+    totalTokens: v.number(),
+    // USD actually charged to the account (OpenRouter `usage.cost`).
+    cost: v.number(),
+    status: v.union(v.literal("done"), v.literal("failed")),
+    createdAt: v.number(),
+  }).index("by_createdAt", ["createdAt"]),
 
   // Raw training-data frames from capture mode. Deliberately NOT the same
   // table as snapshots: these are unlabelled bulk frames, must never be linked

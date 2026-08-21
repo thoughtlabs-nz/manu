@@ -782,3 +782,10 @@ body {
     font-size: 1.3rem;
   }
 }
+
+/* LLM spend chip on a sighting — quieter than the device chip, since it is
+   supporting detail rather than identity. */
+.chip.cost {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.72;
+}

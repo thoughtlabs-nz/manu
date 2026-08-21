@@ -11,6 +11,7 @@
 import type * as captures from "../captures.js";
 import type * as detections from "../detections.js";
 import type * as http from "../http.js";
+import type * as llmUsage from "../llmUsage.js";
 import type * as snapshots from "../snapshots.js";
 import type * as species from "../species.js";
 import type * as testUpload from "../testUpload.js";
@@ -25,6 +26,7 @@ declare const fullApi: ApiFromModules<{
   captures: typeof captures;
   detections: typeof detections;
   http: typeof http;
+  llmUsage: typeof llmUsage;
   snapshots: typeof snapshots;
   species: typeof species;
   testUpload: typeof testUpload;
