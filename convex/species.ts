@@ -18,7 +18,9 @@ Respond with ONLY a JSON object, no other text, no markdown fences:
   "note": string|null          // under 10 words on distinguishing features, or why you're unsure
 }
 
-If the image does not clearly show a bird at all, set commonName to "Unknown bird" and confidence to 0.`;
+If the image does not clearly show a bird at all, set commonName to "Unknown bird" and confidence to 0.
+
+Only show birds that are native to New Zealand in your response as this the location of the camera.`;
 
 // Some models (or a too-small max_tokens) truncate before the closing
 // brace. Try a full JSON.parse first; if that fails, pull fields out
@@ -89,7 +91,7 @@ export const identify = internalAction({
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
-          "HTTP-Referer": "https://manu-bird-cam.pages.dev",
+          "HTTP-Referer": "https://manu.thoughtlabs.co.nz",
           "X-Title": "Manu bird camera",
         },
         body: JSON.stringify({
