@@ -1,39 +1,95 @@
 # ---------------------------------------------------------------------------
 # Bird detection camera — Seeed XIAO ESP32-S3 Sense
 #
-# On-device inference: ESP-DL YOLO11n (COCO 80 classes, includes "bird")
-# via the s3_vision external component. No model training required for v1.
+# v2: on-device inference with our custom-trained single-class ESPDet-Pico
+# bird model (training/README.md), decoded by the s3_vision component's
+# ESPDet postprocessor. ~124 ms/inference vs v1's ~15 s (ESP-DL YOLO11n COCO).
 #
-# Detections are POSTed as JSON to a Convex HTTP action. An MQTT variant is
-# included (commented) at the bottom.
+# Also serves a control web page on the device itself (http://bird-cam-1.local)
+# exposing camera tuning + detection tuning. The same entities appear
+# automatically in Home Assistant over the native API.
 #
-# Flash over USB serial: the custom 8MB partition table has a single large
-# app slot to fit the embedded model, so OTA is not available in this build.
-#   esphome run bird-cam.yaml --device /dev/cu.usbmodem*
+# OTA is available (dual app slots). After the one USB flash that installs this
+# partition table, update over the network:
+#   esphome run bird-cam.yaml --device bird-cam-1.local
+#
+# To go back to v1 (YOLO11n COCO): git show dca4983:esphome/bird-cam.yaml
 # ---------------------------------------------------------------------------
 
 substitutions:
   name: bird-cam-1
   friendly_name: Bird Camera 1
-  # Only report/post detections at or above this confidence
-  bird_min_confidence: "0.40"
+  # Only report/post detections at or above this confidence.
+  # 0.10 is deliberate, not a placeholder: measured off-device on the COCO
+  # bird val set (training/test_model.py), the int8 model's best F1 sits at
+  # 0.05–0.10. At the old 0.30 it recalls only 3.5% of birds. Precision at
+  # 0.10 is ~45%, and server-side species ID rejects the rest.
+  bird_min_confidence: "0.10"
   # Minimum seconds between posted detections (cooldown)
   detection_cooldown: 30s
 
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
+  # Not a C/C++ include — this is how the model reaches a REMOTE builder.
+  # ESPHome's bundler ships files it finds in the validated config, but
+  # `.espdl` is not a recognised extension (bundle.py _KNOWN_FILE_EXTENSIONS)
+  # and s3_vision never registers it, so remote builds failed with
+  # "model_path: file not found".
+  # `includes:` IS collected explicitly, and a DIRECTORY skips the extension
+  # check (core/config.py valid_include tries cv.directory() first), so the
+  # whole models/ dir is bundled. include_file() only emits an #include for
+  # .h/.hpp/.tcc, and PlatformIO ignores .espdl, so the copy into src/ is inert.
+  includes:
+    - models
+  on_boot:
+    # Re-apply restored slider/select values to the OV2640. Runs late
+    # (priority 200 is after components are set up) and the script itself
+    # waits 2s for the sensor to finish initialising.
+    - priority: 200
+      then:
+        - script.execute: apply_camera_settings
 
 esp32:
   board: seeed_xiao_esp32s3
+  # ESPHome 2026.8+ defaults esp-idf builds to a native CMake toolchain, but
+  # s3_vision is PlatformIO-only: it wires ESP-DL in through
+  # add_platformio_option("extra_scripts") plus PIO build flags. Under CMake
+  # none of that runs, no esp-dl include paths are added, and the build dies
+  # with "fatal error: dl_tool.hpp: No such file or directory". Pin the old
+  # toolchain until the component supports CMake. Harmless on older ESPHome,
+  # which only had PlatformIO anyway.
+  toolchain: platformio
   flash_size: 8MB
-  partitions: partitions_8mb.csv
+  # No custom partition table any more -> ESPHome generates a dual-slot
+  # OTA layout (otadata + app0/app1). v1 needed a single 7.5MB factory slot
+  # because the embedded YOLO11n model made the firmware huge; ESPDet-Pico is
+  # ~500KB, so the whole image is ~2.5MB and fits an OTA slot with room spare.
+  # Switching to this table needs ONE more USB flash; after that, OTA works.
   framework:
     type: esp-idf
-    # YOLO inference on this board can hog a core for several seconds; give the
-    # watchdog headroom so the main loop being briefly starved isn't fatal.
+    # v1's YOLO11n could hog a core for seconds. ESPDet-Pico is ~124 ms, but
+    # keep the headroom — it costs nothing and protects against a stall.
     sdkconfig_options:
       CONFIG_ESP_TASK_WDT_TIMEOUT_S: "30"
+      # Let large malloc/new allocations fall back to PSRAM.
+      #
+      # ESPHome's psram component sets CONFIG_SPIRAM_USE_CAPS_ALLOC, which
+      # makes PSRAM reachable ONLY via heap_caps_malloc(MALLOC_CAP_SPIRAM).
+      # Plain new/malloc — which std::string uses — can then only use internal
+      # RAM. The snapshot POST copies the JPEG into a std::string for
+      # http_request's `body`; at 640x480 that is a ~25-42KB internal
+      # allocation competing with wifi and the HTTPS/mbedTLS buffers. It
+      # failed, threw std::bad_alloc, and with exceptions disabled the stub
+      # calls abort() -> "IllegalInstruction" crash loop.
+      #
+      # SPIRAM_USE_MALLOC routes allocations above ALWAYSINTERNAL to PSRAM,
+      # while RESERVE_INTERNAL keeps a pool for DMA/interrupt users that must
+      # stay internal.
+      CONFIG_SPIRAM_USE_CAPS_ALLOC: "n"
+      CONFIG_SPIRAM_USE_MALLOC: "y"
+      CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL: "16384"
+      CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL: "32768"
 
 # 8MB octal PSRAM — required for the camera frame buffer and model tensors
 psram:
@@ -57,6 +113,42 @@ api:
   encryption:
     key: !secret api_encryption_key
   reboot_timeout: 0s
+
+# Native ESPHome OTA. Only usable because the partition table above provides
+# app0/app1 + otadata; the old single-factory-slot table could not OTA at all
+# ("esp_ota_ops: not found otadata" / "serial flashing is required").
+ota:
+  - platform: esphome
+
+# --- On-device control page -------------------------------------------------
+# http://${name}.local/ — every control below shows up here AND in Home
+# Assistant. This is the plain web_server, NOT esp32_camera_web_server: the
+# latter runs an MJPEG streamer that starves ESP-DL of internal RAM and
+# boot-loops the device (see the note on the esp32_camera block).
+#
+# local: true embeds the UI assets in flash (no CDN fetch, works offline).
+# ota: false because this build has no OTA partition to write to.
+web_server:
+  port: 80
+  version: 3
+  local: true
+  ota: false
+  sorting_groups:
+    - id: group_detection
+      name: "Detection"
+      sorting_weight: 10
+    - id: group_image
+      name: "Image"
+      sorting_weight: 20
+    - id: group_exposure
+      name: "Exposure & Gain"
+      sorting_weight: 30
+    - id: group_orientation
+      name: "Orientation"
+      sorting_weight: 40
+    - id: group_diagnostic
+      name: "Diagnostics"
+      sorting_weight: 50
 
 time:
   - platform: sntp
@@ -83,59 +175,130 @@ esp32_camera:
   vsync_pin: GPIO38
   href_pin: GPIO47
   pixel_clock_pin: GPIO13
-  # s3_vision requires RGB565 raw frames in PSRAM; do NOT set jpeg_quality here
-  resolution: 320x240
+  # s3_vision requires RGB565 raw frames in PSRAM; do NOT set jpeg_quality here.
+  # 640x480 (VGA) is 4x the pixels of the old 320x240 -> much more detail for
+  # the server-side species ID, which is what actually names the bird. VGA is
+  # the practical ceiling: OV2640 RGB565 gets unreliable above it, and the
+  # RGB565 buffer is width*height*2 = 614KB in PSRAM (plus the same again for
+  # the vision component's frame copy).
+  resolution: 640x480
   pixel_format: RGB565
   frame_buffer_count: 1
   frame_buffer_location: PSRAM
-  idle_framerate: 0.05fps
+  # THE inference-rate bottleneck. v1 used 0.05fps (one frame every 20s)
+  # because YOLO11n took ~15s anyway. ESPDet-Pico is far faster, so the
+  # camera, not the model, became the limit: measured exactly 20.1s between
+  # inferences. The vision component can only run on the frames it is given.
+  # ESPHome caps idle_framerate at 1fps. The vision component is a passive
+  # CameraListener and never calls request_image(), so the camera stays on its
+  # IDLE schedule -> 1fps is the ceiling for inference rate here. Still 20x
+  # better than v1's 0.05fps.
+  max_framerate: 10fps
+  idle_framerate: 1fps
+  # Starting points; every one of these is adjustable at runtime below.
+  brightness: 0
+  contrast: 0
+  saturation: 0
 
 # NOTE: do NOT add esp32_camera_web_server here. Even one instance starves
 # the ESP-DL model of internal RAM -> bad_alloc abort -> boot loop.
 # To see what the camera sees, pull a frame over the native API instead
 # (scripts/snapshot.py in this repo).
 
-# --- On-device object detection (ESP-DL YOLO11 via s3_vision) ---------------
+# --- On-device object detection (custom ESPDet-Pico bird model) -------------
+# Fork of youkorr/s3_vision (GPL-3.0). The ONLY change on the bird-label
+# branch is the compiled-in class name for the single-class hand_detect
+# family: "hand" -> "bird" (commit 2af4dee).
+#
+# Why a fork rather than patching the cache: the class-name table is fixed at
+# compile time from model_family and is never read from the .espdl, and there
+# is no YAML option for it. Patching ESPHome's cached clone worked, but
+# ESPHome 2026.8 runs `git stash push --include-untracked` +
+# `git reset --hard FETCH_HEAD` on that clone, silently reverting the patch
+# and sending detections back to "hand" — `refresh: never` did not stop it.
+# Upstream changes can be pulled into the fork and the branch rebased.
 external_components:
   - source:
       type: git
-      url: https://github.com/youkorr/s3_vision
-      ref: main
+      url: https://github.com/thoughtlabs-nz/s3_vision
+      ref: bird-label
     components: [vision]
     refresh: 1d
 
 vision:
   id: bird_vision
   esp32_camera_id: bird_camera
-  model_family: coco_detect   # bundled YOLO11n, 80 COCO classes incl. "bird"
-  score_threshold: 0.30       # raw model gate; bird_min_confidence filters again
+
+  # --- How the custom model is installed (v2) ---
+  # `model_path` is resolved relative to this YAML's directory and embedded
+  # into the firmware as flash rodata at build time (vision_build.py turns it
+  # into _binary_vision_detect_espdl_start). It takes priority over the
+  # component's own bundled models — nothing needs to be copied into the
+  # component directory, and nothing is loaded from an SD card.
+  #
+  # `model_family` does NOT name the object being detected — it selects the
+  # decoder + preprocessing pair. hand_detect is the single-class ESPDet
+  # family, which is exactly what espdet_pico was trained as:
+  #   preprocess : mean 0, std 255, letterbox padded with gray 114
+  #   postprocess: ESPDetPostProcessor, strides 8/16/32
+  #   outputs    : box0/score0, box1/score1, box2/score2   <- verified present
+  # Those match our export (224x224 -> 28/14/7 grids), so the model decodes
+  # correctly. See the on_object_detected note about the reported label.
+  model_family: hand_detect
+  model_path: models/espdet_pico_224_224_bird.espdl
+
+  # Raw model gate. Kept below bird_min_confidence so the reporting threshold
+  # above is the single place that decides what counts as a bird.
+  score_threshold: 0.05
   nms_threshold: 0.50
-  detection_interval_ms: 3000 # inference itself takes seconds on the XIAO; don't back them up
+  detection_interval_ms: 800
   max_detections: 10
-  inference_task_stack_size: 8192
+  # 8192 boot-looped at 640x480: ESP-DL's resize/colour-convert path (using
+  # this component's scalar conversion stubs) scales with frame width and
+  # overran the inference task stack. 32768 is the component's maximum.
+  inference_task_stack_size: 32768
   # Priority 1 = same as ESPHome's main loop task (both pinned to core 1), so
   # they timeslice. At priority 5 the inference starves the loop -> task_wdt abort.
   inference_task_priority: 1
-  frame_width: 320
-  frame_height: 240
-  jpeg_quality: 60
+  # MUST match the esp32_camera resolution — the component reads the raw
+  # RGB565 buffer using these dimensions, so a mismatch garbles the frame.
+  frame_width: 640
+  frame_height: 480
+  # 0-100, higher = better. Detection is unaffected (the model always sees a
+  # 224x224 letterbox), but the snapshot is what the species-ID pass reads.
+  jpeg_quality: 75
   draw_boxes: true
-  # Fires on every inference. summary format: "label:score,label:score" or "none"
+
+  # Fires on every inference. summary format: "label:score,label:score" or "none".
+  #
+  # The class-name table is chosen at COMPILE TIME from model_family and is
+  # never read from the .espdl. Upstream that means everything is labelled
+  # "hand"; our fork (see external_components above) relabels it "bird".
+  #
+  # This lambda still ignores the label entirely and takes the highest score
+  # present, so it keeps working even if the component is ever swapped back to
+  # upstream — that would cost the overlay text, never a missed detection.
   on_object_detected:
     - then:
         - lambda: |-
+            ESP_LOGD("bird", "inference: count=%d summary=%s", object_count, summary.c_str());
             float conf = -1.0f;
-            size_t pos = summary.find("bird:");
-            while (pos != std::string::npos) {
-              if (pos == 0 || summary[pos - 1] == ',') {
-                conf = atof(summary.c_str() + pos + 5);
-                break;
-              }
-              pos = summary.find("bird:", pos + 1);
+            size_t pos = 0;
+            while (true) {
+              size_t colon = summary.find(':', pos);
+              if (colon == std::string::npos) break;
+              // Scores are formatted as int(score*100) by build_summary_,
+              // e.g. "hand:37" means 0.37 - scale back to 0..1.
+              float s = atof(summary.c_str() + colon + 1) / 100.0f;
+              if (s > conf) conf = s;
+              size_t comma = summary.find(',', colon);
+              if (comma == std::string::npos) break;
+              pos = comma + 1;
             }
-            if (conf >= ${bird_min_confidence}) {
+            if (conf >= id(min_confidence).state) {
               id(report_bird)->execute(conf, object_count);
             }
+
   # Fires when anything was detected; only upload while a bird report is active
   on_detection_image:
     - then:
@@ -145,15 +308,35 @@ vision:
                 - binary_sensor.is_on: bird_detected
                 - switch.is_on: snapshot_uploads
             then:
+              # POST the JPEG as a RAW body, not base64-in-JSON.
+              # ESPHome hardcodes a 5120-byte cap on JSON serialization
+              # (components/json/json_util.cpp: max_heap_size = 5120), so a
+              # base64 JPEG is silently truncated and Convex 400s. A 320x240
+              # q=60 frame is ~8.7KB -> ~11.6KB base64: never fits. Raw bytes
+              # also drop base64's 33% overhead. std::string is built with an
+              # explicit length so embedded NULs survive, and http_request
+              # sends body.length() bytes (not strlen).
               - http_request.post:
                   url: !secret convex_snapshot_url
                   request_headers:
-                    Content-Type: application/json
+                    Content-Type: image/jpeg
                     Authorization: !secret detection_api_key
-                  json: |-
-                    root["device"] = App.get_name();
-                    root["ts"] = (long) id(sntp_time).utcnow().timestamp;
-                    root["image_b64"] = esphome::base64_encode(image.data, image.length);
+                    # Header lambdas must return `const char *`. App.get_name()
+                    # is a StringRef backed by stable storage, so c_str() is
+                    # safe; the timestamp needs a static buffer because a
+                    # pointer into a temporary std::string would dangle.
+                    X-Device: !lambda "return App.get_name().c_str();"
+                    X-Timestamp: !lambda |-
+                      static char ts_buf[16];
+                      snprintf(ts_buf, sizeof(ts_buf), "%ld",
+                               (long) id(sntp_time).utcnow().timestamp);
+                      return ts_buf;
+                  body: !lambda |-
+                    return std::string(reinterpret_cast<const char *>(image.data), image.length);
+                  on_error:
+                    - logger.log:
+                        level: WARN
+                        format: "Snapshot POST to Convex failed"
 
 # --- Detection reporting ----------------------------------------------------
 script:
@@ -176,7 +359,7 @@ script:
             Authorization: !secret detection_api_key
           json: |-
             root["device"] = App.get_name();
-            root["species"] = "bird";          // COCO class; species ID is server-side (v2)
+            root["species"] = "bird";          // species ID is server-side (v3)
             root["confidence"] = confidence;
             root["object_count"] = count;
             root["ts"] = (long) id(sntp_time).utcnow().timestamp;
@@ -189,11 +372,40 @@ script:
           id: bird_detected
           state: OFF
 
+  # Push every slider/select back into the sensor after a reboot, so a
+  # restored value is actually applied to the OV2640 and not just displayed.
+  - id: apply_camera_settings
+    mode: restart
+    then:
+      - delay: 2s
+      - lambda: |-
+          auto *cam = id(bird_camera);
+          cam->set_brightness((int) id(cam_brightness).state);
+          cam->set_contrast((int) id(cam_contrast).state);
+          cam->set_saturation((int) id(cam_saturation).state);
+          cam->set_ae_level((int) id(cam_ae_level).state);
+          cam->set_vertical_flip(id(cam_vertical_flip).state);
+          cam->set_horizontal_mirror(id(cam_horizontal_mirror).state);
+          cam->set_aec_mode(id(cam_auto_exposure).state
+                            ? esp32_camera::ESP32_GC_MODE_AUTO
+                            : esp32_camera::ESP32_GC_MODE_MANU);
+          cam->set_aec2(id(cam_aec2).state);
+          cam->set_agc_mode(id(cam_auto_gain).state
+                            ? esp32_camera::ESP32_GC_MODE_AUTO
+                            : esp32_camera::ESP32_GC_MODE_MANU);
+          cam->set_agc_value((uint8_t) id(cam_agc_value).state);
+          cam->set_aec_value((uint32_t) id(cam_aec_value).state);
+          cam->update_camera_parameters();
+
+
 binary_sensor:
   - platform: template
     id: bird_detected
     name: Bird Detected
     device_class: occupancy
+    web_server:
+      sorting_group_id: group_detection
+      sorting_weight: 1
 
 sensor:
   - platform: template
@@ -201,16 +413,237 @@ sensor:
     name: Bird Confidence
     accuracy_decimals: 2
     state_class: measurement
+    web_server:
+      sorting_group_id: group_detection
+      sorting_weight: 2
   - platform: wifi_signal
     name: WiFi Signal
     update_interval: 60s
+    entity_category: diagnostic
+    web_server:
+      sorting_group_id: group_diagnostic
+      sorting_weight: 1
   - platform: uptime
     name: Uptime
+    entity_category: diagnostic
+    web_server:
+      sorting_group_id: group_diagnostic
+      sorting_weight: 2
+  - platform: internal_temperature
+    name: Internal Temperature
+    entity_category: diagnostic
+    web_server:
+      sorting_group_id: group_diagnostic
+      sorting_weight: 3
+
+# --- Runtime tuning ---------------------------------------------------------
+# Everything here is optimistic + restore_value, so a setting survives a
+# reboot and is re-applied to the sensor by apply_camera_settings.
+number:
+  - platform: template
+    id: min_confidence
+    name: Min Confidence
+    icon: mdi:target
+    optimistic: true
+    restore_value: true
+    initial_value: ${bird_min_confidence}
+    min_value: 0.01
+    max_value: 1.0
+    step: 0.01
+    mode: slider
+    web_server:
+      sorting_group_id: group_detection
+      sorting_weight: 3
+
+  - platform: template
+    id: cam_brightness
+    name: Brightness
+    icon: mdi:brightness-6
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    min_value: -2
+    max_value: 2
+    step: 1
+    mode: slider
+    set_action:
+      - lambda: |-
+          id(bird_camera).set_brightness((int) x);
+          id(bird_camera).update_camera_parameters();
+    web_server:
+      sorting_group_id: group_image
+      sorting_weight: 1
+
+  - platform: template
+    id: cam_contrast
+    name: Contrast
+    icon: mdi:contrast-circle
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    min_value: -2
+    max_value: 2
+    step: 1
+    mode: slider
+    set_action:
+      - lambda: |-
+          id(bird_camera).set_contrast((int) x);
+          id(bird_camera).update_camera_parameters();
+    web_server:
+      sorting_group_id: group_image
+      sorting_weight: 2
+
+  - platform: template
+    id: cam_saturation
+    name: Saturation
+    icon: mdi:palette
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    min_value: -2
+    max_value: 2
+    step: 1
+    mode: slider
+    set_action:
+      - lambda: |-
+          id(bird_camera).set_saturation((int) x);
+          id(bird_camera).update_camera_parameters();
+    web_server:
+      sorting_group_id: group_image
+      sorting_weight: 3
+
+  - platform: template
+    id: cam_ae_level
+    name: AE Level
+    icon: mdi:brightness-auto
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    min_value: -2
+    max_value: 2
+    step: 1
+    mode: slider
+    set_action:
+      - lambda: |-
+          id(bird_camera).set_ae_level((int) x);
+          id(bird_camera).update_camera_parameters();
+    web_server:
+      sorting_group_id: group_exposure
+      sorting_weight: 3
+
+  # Only takes effect when Auto Exposure is off.
+  - platform: template
+    id: cam_aec_value
+    name: Manual Exposure
+    icon: mdi:camera-iris
+    optimistic: true
+    restore_value: true
+    initial_value: 300
+    min_value: 0
+    max_value: 1200
+    step: 10
+    mode: slider
+    set_action:
+      - lambda: |-
+          id(bird_camera).set_aec_value((uint32_t) x);
+          id(bird_camera).update_camera_parameters();
+    web_server:
+      sorting_group_id: group_exposure
+      sorting_weight: 4
+
+  # Only takes effect when Auto Gain is off.
+  - platform: template
+    id: cam_agc_value
+    name: Manual Gain
+    icon: mdi:signal
+    optimistic: true
+    restore_value: true
+    initial_value: 0
+    min_value: 0
+    max_value: 30
+    step: 1
+    mode: slider
+    set_action:
+      - lambda: |-
+          id(bird_camera).set_agc_value((uint8_t) x);
+          id(bird_camera).update_camera_parameters();
+    web_server:
+      sorting_group_id: group_exposure
+      sorting_weight: 6
+
+select:
+  - platform: template
+    id: cam_white_balance
+    name: White Balance
+    icon: mdi:white-balance-sunny
+    optimistic: true
+    restore_value: true
+    options: [auto, sunny, cloudy, office, home]
+    initial_option: auto
+    set_action:
+      - lambda: |-
+          auto mode = esp32_camera::ESP32_WB_MODE_AUTO;
+          if (x == "sunny")  mode = esp32_camera::ESP32_WB_MODE_SUNNY;
+          if (x == "cloudy") mode = esp32_camera::ESP32_WB_MODE_CLOUDY;
+          if (x == "office") mode = esp32_camera::ESP32_WB_MODE_OFFICE;
+          if (x == "home")   mode = esp32_camera::ESP32_WB_MODE_HOME;
+          id(bird_camera).set_wb_mode(mode);
+          id(bird_camera).update_camera_parameters();
+    web_server:
+      sorting_group_id: group_image
+      sorting_weight: 4
+
+  - platform: template
+    id: cam_special_effect
+    name: Special Effect
+    icon: mdi:image-filter-vintage
+    optimistic: true
+    restore_value: true
+    options: [none, negative, grayscale, red_tint, green_tint, blue_tint, sepia]
+    initial_option: none
+    set_action:
+      - lambda: |-
+          auto fx = esp32_camera::ESP32_SPECIAL_EFFECT_NONE;
+          if (x == "negative")   fx = esp32_camera::ESP32_SPECIAL_EFFECT_NEGATIVE;
+          if (x == "grayscale")  fx = esp32_camera::ESP32_SPECIAL_EFFECT_GRAYSCALE;
+          if (x == "red_tint")   fx = esp32_camera::ESP32_SPECIAL_EFFECT_RED_TINT;
+          if (x == "green_tint") fx = esp32_camera::ESP32_SPECIAL_EFFECT_GREEN_TINT;
+          if (x == "blue_tint")  fx = esp32_camera::ESP32_SPECIAL_EFFECT_BLUE_TINT;
+          if (x == "sepia")      fx = esp32_camera::ESP32_SPECIAL_EFFECT_SEPIA;
+          id(bird_camera).set_special_effect(fx);
+          id(bird_camera).update_camera_parameters();
+    web_server:
+      sorting_group_id: group_image
+      sorting_weight: 5
+
+  - platform: template
+    id: cam_gain_ceiling
+    name: Gain Ceiling
+    icon: mdi:arrow-collapse-up
+    optimistic: true
+    restore_value: true
+    options: ["2x", "4x", "8x", "16x", "32x", "64x", "128x"]
+    initial_option: "2x"
+    set_action:
+      - lambda: |-
+          auto gc = esp32_camera::ESP32_GAINCEILING_2X;
+          if (x == "4x")   gc = esp32_camera::ESP32_GAINCEILING_4X;
+          if (x == "8x")   gc = esp32_camera::ESP32_GAINCEILING_8X;
+          if (x == "16x")  gc = esp32_camera::ESP32_GAINCEILING_16X;
+          if (x == "32x")  gc = esp32_camera::ESP32_GAINCEILING_32X;
+          if (x == "64x")  gc = esp32_camera::ESP32_GAINCEILING_64X;
+          if (x == "128x") gc = esp32_camera::ESP32_GAINCEILING_128X;
+          id(bird_camera).set_agc_gain_ceiling(gc);
+          id(bird_camera).update_camera_parameters();
+    web_server:
+      sorting_group_id: group_exposure
+      sorting_weight: 7
 
 switch:
   - platform: template
     id: detection_enabled
     name: Detection Enabled
+    icon: mdi:eye
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
     turn_on_action:
@@ -219,20 +652,137 @@ switch:
     turn_off_action:
       - vision.stop:
           id: bird_vision
+    web_server:
+      sorting_group_id: group_detection
+      sorting_weight: 4
+
   - platform: template
     id: snapshot_uploads
     name: Snapshot Uploads
+    icon: mdi:cloud-upload
     optimistic: true
     restore_mode: RESTORE_DEFAULT_ON
+    web_server:
+      sorting_group_id: group_detection
+      sorting_weight: 5
+
+  - platform: template
+    id: cam_vertical_flip
+    name: Vertical Flip
+    icon: mdi:flip-vertical
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: |-
+          id(bird_camera).set_vertical_flip(true);
+          id(bird_camera).update_camera_parameters();
+    turn_off_action:
+      - lambda: |-
+          id(bird_camera).set_vertical_flip(false);
+          id(bird_camera).update_camera_parameters();
+    web_server:
+      sorting_group_id: group_orientation
+      sorting_weight: 1
+
+  - platform: template
+    id: cam_horizontal_mirror
+    name: Horizontal Mirror
+    icon: mdi:flip-horizontal
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: |-
+          id(bird_camera).set_horizontal_mirror(true);
+          id(bird_camera).update_camera_parameters();
+    turn_off_action:
+      - lambda: |-
+          id(bird_camera).set_horizontal_mirror(false);
+          id(bird_camera).update_camera_parameters();
+    web_server:
+      sorting_group_id: group_orientation
+      sorting_weight: 2
+
+  - platform: template
+    id: cam_auto_exposure
+    name: Auto Exposure
+    icon: mdi:camera-iris
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    turn_on_action:
+      - lambda: |-
+          id(bird_camera).set_aec_mode(esp32_camera::ESP32_GC_MODE_AUTO);
+          id(bird_camera).update_camera_parameters();
+    turn_off_action:
+      - lambda: |-
+          id(bird_camera).set_aec_mode(esp32_camera::ESP32_GC_MODE_MANU);
+          id(bird_camera).update_camera_parameters();
+    web_server:
+      sorting_group_id: group_exposure
+      sorting_weight: 1
+
+  - platform: template
+    id: cam_aec2
+    name: AEC DSP
+    icon: mdi:chip
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    turn_on_action:
+      - lambda: |-
+          id(bird_camera).set_aec2(true);
+          id(bird_camera).update_camera_parameters();
+    turn_off_action:
+      - lambda: |-
+          id(bird_camera).set_aec2(false);
+          id(bird_camera).update_camera_parameters();
+    web_server:
+      sorting_group_id: group_exposure
+      sorting_weight: 2
+
+  - platform: template
+    id: cam_auto_gain
+    name: Auto Gain
+    icon: mdi:signal-variant
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    turn_on_action:
+      - lambda: |-
+          id(bird_camera).set_agc_mode(esp32_camera::ESP32_GC_MODE_AUTO);
+          id(bird_camera).update_camera_parameters();
+    turn_off_action:
+      - lambda: |-
+          id(bird_camera).set_agc_mode(esp32_camera::ESP32_GC_MODE_MANU);
+          id(bird_camera).update_camera_parameters();
+    web_server:
+      sorting_group_id: group_exposure
+      sorting_weight: 5
 
 button:
   - platform: template
     name: Run Inference Now
+    icon: mdi:play
     on_press:
       - vision.inference:
           id: bird_vision
+    web_server:
+      sorting_group_id: group_detection
+      sorting_weight: 6
+
+  - platform: template
+    name: Reapply Camera Settings
+    icon: mdi:refresh
+    entity_category: config
+    on_press:
+      - script.execute: apply_camera_settings
+    web_server:
+      sorting_group_id: group_image
+      sorting_weight: 6
+
   - platform: restart
     name: Restart
+    entity_category: config
+    web_server:
+      sorting_group_id: group_diagnostic
+      sorting_weight: 4
 
 # XIAO ESP32-S3 user LED (inverted): lit while a detection is being reported
 light:
