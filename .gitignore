@@ -16,4 +16,8 @@ training/venv/
 training/esp-detection/
 training/annotations/
 training/annotations_trainval2017.zip
-training/*
+training/test_out/
+
+# Python
+__pycache__/
+*.pyc
