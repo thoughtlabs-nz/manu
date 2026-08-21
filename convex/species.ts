@@ -96,7 +96,7 @@ export const identify = internalAction({
         },
         body: JSON.stringify({
           model,
-          temperature: 0.2,
+          temperature: 0.1,
           max_tokens: 500,
           messages: [
             {
@@ -126,14 +126,17 @@ export const identify = internalAction({
       const text: string = data.choices?.[0]?.message?.content ?? "";
       const parsed = extractSpeciesFields(text);
 
-      // Record spend BEFORE the parse can throw: OpenRouter bills for the
-      // call whether or not we could read the answer, so accounting must not
-      // depend on parsing succeeding. Cost is returned automatically in
-      // `usage.cost` (USD charged); no request parameter is needed.
+      // Record spend BEFORE the parse can throw: OpenRouter bills for the call
+      // whether or not we could read the answer, so accounting must not depend
+      // on our parser succeeding. Cost is returned automatically in
+      // `usage.cost` (USD actually charged) — the `usage: {include: true}`
+      // parameter is deprecated and has no effect.
       const usage = data.usage ?? {};
       const cost = typeof usage.cost === "number" ? usage.cost : 0;
       await ctx.runMutation(internal.species.recordUsage, {
         detectionId,
+        // Read the model from the RESPONSE, not the request: it reflects what
+        // actually served the call.
         model: typeof data.model === "string" ? data.model : model,
         promptTokens: usage.prompt_tokens ?? 0,
         completionTokens: usage.completion_tokens ?? 0,
@@ -187,6 +190,9 @@ export const recordResult = internalMutation({
   },
 });
 
+// One row per OpenRouter call, including calls that were billed but returned
+// nothing usable. Kept separate from the detection so cost history survives the
+// sighting being deleted.
 export const recordUsage = internalMutation({
   args: {
     detectionId: v.optional(v.id("detections")),
