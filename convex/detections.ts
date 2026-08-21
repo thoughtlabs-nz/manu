@@ -87,13 +87,33 @@ export const remove = mutation({
   handler: async (ctx, { detectionId }) => {
     const detection = await ctx.db.get(detectionId);
     if (!detection) return;
-    if (detection.snapshotId) {
+
+    // Delete EVERY snapshot belonging to this detection, not just the one
+    // detection.snapshotId points at. The device uploads a snapshot on each
+    // inference for the whole cooldown, so a sighting can own several; the
+    // rest were previously left behind with their storage blobs.
+    const owned = await ctx.db
+      .query("snapshots")
+      .withIndex("by_detection", (q) => q.eq("detectionId", detectionId))
+      .collect();
+
+    const seen = new Set<string>();
+    for (const snapshot of owned) {
+      seen.add(snapshot._id as string);
+      await ctx.storage.delete(snapshot.storageId);
+      await ctx.db.delete(snapshot._id);
+    }
+
+    // Belt and braces: the forward reference may point at a row whose
+    // back-reference was never written.
+    if (detection.snapshotId && !seen.has(detection.snapshotId as string)) {
       const snapshot = await ctx.db.get(detection.snapshotId);
       if (snapshot) {
         await ctx.storage.delete(snapshot.storageId);
         await ctx.db.delete(snapshot._id);
       }
     }
+
     await ctx.db.delete(detectionId);
   },
 });

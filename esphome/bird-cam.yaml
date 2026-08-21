@@ -160,6 +160,17 @@ globals:
     restore_value: false
     initial_value: "0"
 
+  # Set when a sighting is reported, cleared once its snapshot is uploaded, so
+  # exactly ONE snapshot is sent per sighting. bird_detected stays ON for the
+  # whole cooldown, so without this the device uploaded a frame on every
+  # inference (~30 per sighting): wasted uplink and storage, and the JPEG
+  # encode + HTTPS POST on the inference task is what starved the main loop
+  # ("api took a long time" warnings).
+  - id: snapshot_pending
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
 time:
   - platform: sntp
     id: sntp_time
@@ -354,9 +365,12 @@ vision:
         # --- Normal detection snapshot --------------------------------------
         - if:
             condition:
-              and:
-                - binary_sensor.is_on: bird_detected
-                - switch.is_on: snapshot_uploads
+              lambda: |-
+                if (!id(bird_detected).state) return false;
+                if (!id(snapshot_uploads).state) return false;
+                if (!id(snapshot_pending)) return false;   // already sent for this sighting
+                id(snapshot_pending) = false;
+                return true;
             then:
               # POST the JPEG as a RAW body, not base64-in-JSON.
               # ESPHome hardcodes a 5120-byte cap on JSON serialization
@@ -402,6 +416,8 @@ script:
       - binary_sensor.template.publish:
           id: bird_detected
           state: ON
+      # Arm exactly one snapshot upload for this sighting.
+      - lambda: "id(snapshot_pending) = true;"
       - http_request.post:
           url: !secret convex_ingest_url
           request_headers:

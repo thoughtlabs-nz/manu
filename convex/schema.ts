@@ -58,5 +58,9 @@ export default defineSchema({
     receivedAt: v.number(),
     storageId: v.id("_storage"),
     detectionId: v.optional(v.id("detections")),
-  }).index("by_device", ["device", "receivedAt"]),
+  })
+    .index("by_device", ["device", "receivedAt"])
+    // Lets a delete find EVERY snapshot belonging to a detection, not just the
+    // one detection.snapshotId points at.
+    .index("by_detection", ["detectionId"]),
 });

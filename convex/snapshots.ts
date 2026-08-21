@@ -27,14 +27,23 @@ export const ingest = internalMutation({
       )
       .order("desc")
       .take(10);
-    const target = candidates.find((d) => d.snapshotId === undefined);
-    if (target) {
-      await ctx.db.patch(target._id, { snapshotId, speciesStatus: "pending" });
-      await ctx.db.patch(snapshotId, { detectionId: target._id });
-      await ctx.scheduler.runAfter(0, internal.species.identify, {
-        detectionId: target._id,
-        storageId: args.storageId,
-      });
+    // The device uploads a snapshot on every inference for the whole cooldown,
+    // so one sighting owns several. Attribute EVERY snapshot to its detection:
+    // previously only the first was linked and the rest were unreachable, so
+    // deleting a sighting left them (and their storage blobs) behind forever.
+    const owner = candidates[0];
+    if (owner) {
+      await ctx.db.patch(snapshotId, { detectionId: owner._id });
+
+      // ...but only the first triggers the paid species ID, and only the first
+      // becomes the sighting's display image.
+      if (owner.snapshotId === undefined) {
+        await ctx.db.patch(owner._id, { snapshotId, speciesStatus: "pending" });
+        await ctx.scheduler.runAfter(0, internal.species.identify, {
+          detectionId: owner._id,
+          storageId: args.storageId,
+        });
+      }
     }
 
     return snapshotId;

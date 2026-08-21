@@ -9,7 +9,13 @@ function unauthorized(request: Request): Response | null {
   if (!expected) {
     return new Response("DETECTION_API_KEY not configured", { status: 500 });
   }
-  if (request.headers.get("Authorization") !== `Bearer ${expected}`) {
+  // Compare bare tokens. DETECTION_API_KEY has been set both ways in practice
+  // ("<token>" and "Bearer <token>"); the latter used to fail every request
+  // with a 401 that looked like a wrong key, because the check built
+  // "Bearer Bearer <token>". Tolerate the prefix on either side instead.
+  const strip = (v: string) => v.replace(/^Bearer\s+/i, "").trim();
+  const provided = request.headers.get("Authorization");
+  if (!provided || strip(provided) !== strip(expected)) {
     return new Response("Unauthorized", { status: 401 });
   }
   return null;
