@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { useMutation, useQuery } from "convex/react";
+import fantail from "./assets/fantail.png";
 import { api } from "../../convex/_generated/api";
 import TestUpload from "./TestUpload";
 import Calendar from "./Calendar";
@@ -41,23 +42,11 @@ function absoluteTime(ms: number): string {
   });
 }
 
-// A pīwakawaka (fantail) — its fanned tail is the clearest "this is a bird"
-// silhouette at small sizes, and it's the bird that keeps showing up in the
-// test photos, so it fits.
-function BirdMark() {
-  return (
-    <svg viewBox="0 0 64 48" className="bird-mark" aria-hidden="true">
-      <g stroke="currentColor" strokeLinecap="round" fill="none">
-        <path d="M21 27 L3 31 M21 27 L4 19 M21 27 L9 9 M21 27 L17 4 M21 27 L25 6" strokeWidth="4" />
-        <path d="M10 42 L52 42" strokeWidth="2" />
-        <path d="M32 34 L30 42 M38 34 L39 42" strokeWidth="1.6" />
-      </g>
-      <ellipse cx="36" cy="26" rx="13" ry="10" fill="currentColor" />
-      <circle cx="49" cy="17" r="7" fill="currentColor" />
-      <polygon points="55,17 61,19 55,21" fill="currentColor" />
-      <circle cx="50.5" cy="15" r="1.3" fill="var(--paper)" />
-    </svg>
-  );
+// The pīwakawaka (fantail) logo. Sized in CSS by height, not width: the
+// artwork is near-square (1.10:1) where the old inline SVG was wide, so
+// matching on height is what keeps it visually balanced against the wordmark.
+function BirdMark({ className = "bird-mark" }: { className?: string }) {
+  return <img src={fantail} className={className} alt="" aria-hidden="true" />;
 }
 
 function EmptyPerch() {

@@ -80,8 +80,11 @@ body {
 }
 
 .bird-mark {
-  width: 52px;
-  color: var(--rust);
+  /* Height-based: the artwork is near-square, so a width rule would make it
+     tower over the wordmark. 72px sits with the Fraunces "Manu" cap-height
+     without crowding it. Exported at 3x (216px) for retina. */
+  height: 72px;
+  width: auto;
   flex-shrink: 0;
 }
 
@@ -621,8 +624,10 @@ body {
 }
 
 .entry-photo-none .bird-mark {
-  width: 44px;
-  color: var(--sage);
+  /* A quiet placeholder, not a second logo — smaller and faded back so it
+     reads as absence rather than branding. */
+  height: 52px;
+  opacity: 0.3;
 }
 
 .entry-photo-none span {
