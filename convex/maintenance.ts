@@ -1,4 +1,4 @@
-import { mutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 
 // Batched: a single Convex mutation has read/write limits, and there can be
@@ -87,5 +87,37 @@ export const cleanupOrphans = mutation({
       files.filter((f) => !referenced.has(f._id as string)).length - filesDeleted;
 
     return { rowsDeleted, filesDeleted, bytesFreed, remaining: Math.max(remaining, 0) };
+  },
+});
+
+// Retire a camera: drop its live status, its desired config, and any commands
+// still queued for it. Internal because it is destructive and belongs in an
+// operator's hands, not in the web client — and because a device that is
+// merely offline should be left alone, not forgotten.
+//
+// The device rebuilds all of this on its next beacon if it ever comes back.
+export const forgetDevice = internalMutation({
+  args: { device: v.string() },
+  handler: async (ctx, { device }) => {
+    let removed = 0;
+
+    const status = await ctx.db
+      .query("deviceStatus")
+      .withIndex("by_device", (q) => q.eq("device", device))
+      .collect();
+    const config = await ctx.db
+      .query("deviceConfig")
+      .withIndex("by_device", (q) => q.eq("device", device))
+      .collect();
+    const commands = await ctx.db
+      .query("deviceCommands")
+      .filter((q) => q.eq(q.field("device"), device))
+      .collect();
+
+    for (const doc of [...status, ...config, ...commands]) {
+      await ctx.db.delete(doc._id);
+      removed++;
+    }
+    return { removed };
   },
 });

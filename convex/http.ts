@@ -189,4 +189,100 @@ http.route({
   }),
 });
 
+// POST /beacon
+//
+// The device's 10-second heartbeat, and the ONLY way anything reaches the
+// camera. It sits behind NAT on a home LAN with no inbound path, so Convex can
+// never call it; instead the device asks, every 10s, and the answer rides back
+// in this response. Stats go up, commands and config come down, one request.
+//
+// Request:  { device, ts, uptime, rssi, free_internal, largest_free_internal,
+//             free_psram, loop_time, temperature, inferences, config_rev,
+//             settings: {...} }
+// Response: { ok, commands: ["trigger"], config_rev, config: {...} | null }
+//
+// The response MUST stay small: ESPHome buffers it into a fixed
+// max_response_buffer_size (2kB in bird-cam.yaml) and silently truncates past
+// it, which would surface as a JSON parse failure on the device rather than an
+// error here. `config` is null on a steady-state beat for exactly this reason.
+function num(v: unknown): number {
+  return typeof v === "number" && Number.isFinite(v) ? v : 0;
+}
+
+function bool(v: unknown): boolean {
+  return v === true;
+}
+
+http.route({
+  path: "/beacon",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const denied = unauthorized(request);
+    if (denied) return denied;
+
+    let body: Record<string, unknown>;
+    try {
+      body = await request.json();
+    } catch {
+      return new Response("Invalid JSON", { status: 400 });
+    }
+
+    const device = body["device"];
+    if (typeof device !== "string" || !device) {
+      return new Response("Missing device", { status: 400 });
+    }
+
+    const s = (body["settings"] ?? {}) as Record<string, unknown>;
+
+    // Coerced rather than validated: a beacon is telemetry, and dropping a
+    // whole beat because one sensor has not published yet (they read NaN
+    // before their first update) would blind the UI for no good reason.
+    const result = await ctx.runMutation(internal.devices.beacon, {
+      device,
+      deviceTs: num(body["ts"]),
+      uptime: num(body["uptime"]),
+      rssi: num(body["rssi"]),
+      freeInternal: num(body["free_internal"]),
+      largestFreeInternal: num(body["largest_free_internal"]),
+      freePsram: num(body["free_psram"]),
+      loopTime: num(body["loop_time"]),
+      temperature: num(body["temperature"]),
+      inferences: num(body["inferences"]),
+      appliedRev: num(body["config_rev"]),
+      reported: {
+        minConfidence: num(s["min_confidence"]),
+        detectionEnabled: bool(s["detection_enabled"]),
+        snapshotUploads: bool(s["snapshot_uploads"]),
+        captureMode: bool(s["capture_mode"]),
+        captureInterval: num(s["capture_interval"]),
+        brightness: num(s["brightness"]),
+        contrast: num(s["contrast"]),
+        saturation: num(s["saturation"]),
+        aeLevel: num(s["ae_level"]),
+      },
+    });
+
+    return Response.json({
+      ok: true,
+      commands: result.commands,
+      config_rev: result.configRev,
+      // snake_case on the wire to match the keys the device sends up, so the
+      // ESPHome lambda reads one naming convention throughout.
+      config: result.config
+        ? {
+            min_confidence: result.config.minConfidence,
+            detection_enabled: result.config.detectionEnabled,
+            snapshot_uploads: result.config.snapshotUploads,
+            capture_mode: result.config.captureMode,
+            capture_interval: result.config.captureInterval,
+            brightness: result.config.brightness,
+            contrast: result.config.contrast,
+            saturation: result.config.saturation,
+            ae_level: result.config.aeLevel,
+          }
+        : null,
+    });
+  }),
+});
+
 export default http;

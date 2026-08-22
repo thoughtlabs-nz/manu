@@ -107,6 +107,14 @@ captive_portal:
 logger:
   level: DEBUG
 
+# Memory + loop diagnostics for the beacon. Using this component rather than
+# heap_caps_get_free_size() in a lambda keeps esp_heap_caps.h out of the
+# generated main.cpp, and it exposes exactly the numbers this board's failure
+# mode needs: `block` (largest contiguous internal allocation) is what actually
+# predicts the std::bad_alloc boot loop, not `free`.
+debug:
+  update_interval: 10s
+
 # Native API kept for Home Assistant / esphome logs. reboot_timeout: 0s stops
 # the device rebooting every 15 min when no HA is connected (Convex-only use).
 api:
@@ -170,6 +178,37 @@ globals:
     type: bool
     restore_value: false
     initial_value: "false"
+
+  # Inferences since boot. Divided by uptime this is the real achieved
+  # inference rate, which is the single most useful number for telling
+  # "the camera is fine, nothing flew past" apart from "the camera is stuck".
+  - id: inference_count
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
+
+  # Config generation last applied from the cloud. restore_value: false and an
+  # impossible starting value on purpose: after ANY reboot the device re-pulls
+  # its config on the first beacon, so a device that came back from a crash
+  # cannot sit indefinitely on settings nobody chose.
+  - id: applied_config_rev
+    type: int32_t
+    restore_value: false
+    initial_value: "-1"
+
+  # Set by a "trigger" command from the UI; consumed by the next inference,
+  # which then reports regardless of confidence. A deadline rather than a bare
+  # flag because with Detection Enabled off no inference ever runs, and an
+  # armed flag would otherwise fire days later when detection was switched
+  # back on.
+  - id: force_report
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: force_report_until
+    type: uint32_t
+    restore_value: false
+    initial_value: "0"
 
 time:
   - platform: sntp
@@ -316,11 +355,28 @@ vision:
               if (comma == std::string::npos) break;
               pos = comma + 1;
             }
+            id(inference_count)++;
+
+            // A "trigger" command from the UI reports the very next inference
+            // whatever it saw, so the button means "log what you can see now"
+            // rather than "log the next bird". Consumed on the first inference
+            // after it arrives; if the deadline passed while detection was
+            // switched off, it is dropped rather than fired late.
+            bool forced = false;
+            if (id(force_report)) {
+              forced = (int32_t)(millis() - id(force_report_until)) < 0;
+              id(force_report) = false;
+            }
+
             // While capturing training data we deliberately do NOT report:
             // a collection run would otherwise flood the detections table and
             // spend money on species ID for thousands of unlabelled frames.
-            if (!id(capture_mode).state && conf >= id(min_confidence).state) {
-              id(report_bird)->execute(conf, object_count);
+            // A forced report is no exception — capture runs must stay free.
+            if (!id(capture_mode).state &&
+                (forced || conf >= id(min_confidence).state)) {
+              // conf is -1 when the summary was "none"; a forced report on an
+              // empty frame is legitimate, so clamp rather than skip.
+              id(report_bird)->execute(conf < 0.0f ? 0.0f : conf, object_count);
             }
 
   # Fires when anything was detected; only upload while a bird report is active
@@ -464,6 +520,151 @@ script:
           cam->update_camera_parameters();
 
 
+# --- The beacon: stats up, commands + config down ---------------------------
+#
+# This device is behind NAT on a home LAN. Convex cannot open a connection to
+# it, ever. So every exchange has to be device-initiated, and this one POST is
+# the whole control channel: it carries telemetry up and takes any queued
+# command plus the desired configuration back down in its own response body.
+# One request serves both directions.
+#
+# Why not MQTT, which would push commands instantly instead of within 10s:
+#   - Convex is stateless and HTTP-only, so it cannot hold a broker
+#     subscription. MQTT would mean running a bridge process 24/7 purely to
+#     translate, which throws away the serverless property of the rest of this.
+#   - An MQTT client plus its TLS session is another permanent internal-RAM
+#     allocation on a board that already boot-loops with std::bad_alloc when
+#     internal RAM runs short (see the esp32_camera and psram notes above).
+# A 10s worst-case button latency is a good trade for neither of those.
+#
+# Why 10s: each beat costs ~2 Convex function calls, so 10s is ~520k/month
+# against a 1M free-tier budget for one camera. Raise this to 30s if the quota
+# matters more than button latency, or if the blocking HTTPS POST below shows
+# up as loop jitter — http_request runs on the main loop task, which timeslices
+# with the inference task at the same priority.
+interval:
+  - interval: 10s
+    then:
+      - if:
+          condition:
+            wifi.connected:
+          then:
+            - http_request.post:
+                url: !secret convex_beacon_url
+                request_headers:
+                  Content-Type: application/json
+                  Authorization: !secret detection_api_key
+                capture_response: true
+                # The steady-state response is a few dozen bytes; a full config
+                # push is ~350. 2kB is headroom, but it IS a hard cap —
+                # ESPHome truncates past it and the parse below would fail.
+                max_response_buffer_size: 2kB
+                json: |-
+                  // Sensors read NaN until their first update, and ArduinoJson
+                  // serialises NaN as `null`, which would fail the server's
+                  // number check. Coerce here instead.
+                  auto sv = [](float v) -> float { return std::isnan(v) ? 0.0f : v; };
+                  root["device"] = App.get_name();
+                  root["ts"] = (long) id(sntp_time).utcnow().timestamp;
+                  root["uptime"] = (long) (millis() / 1000);
+                  root["rssi"] = (int) sv(id(wifi_rssi).state);
+                  root["free_internal"] = (long) sv(id(heap_free).state);
+                  root["largest_free_internal"] = (long) sv(id(heap_block).state);
+                  root["free_psram"] = (long) sv(id(psram_free).state);
+                  root["loop_time"] = (long) sv(id(loop_time).state);
+                  root["temperature"] = sv(id(internal_temp).state);
+                  root["inferences"] = (long) id(inference_count);
+                  root["config_rev"] = (long) id(applied_config_rev);
+                  // The device's own view of its settings. The UI renders THIS
+                  // rather than the desired config, so a control on screen
+                  // always shows what the hardware is actually doing.
+                  JsonObject st = root["settings"].to<JsonObject>();
+                  st["min_confidence"] = sv(id(min_confidence).state);
+                  st["detection_enabled"] = id(detection_enabled).state;
+                  st["snapshot_uploads"] = id(snapshot_uploads).state;
+                  st["capture_mode"] = id(capture_mode).state;
+                  st["capture_interval"] = sv(id(capture_interval).state);
+                  st["brightness"] = sv(id(cam_brightness).state);
+                  st["contrast"] = sv(id(cam_contrast).state);
+                  st["saturation"] = sv(id(cam_saturation).state);
+                  st["ae_level"] = sv(id(cam_ae_level).state);
+                on_response:
+                  - lambda: |-
+                      if (response->status_code != 200) {
+                        ESP_LOGW("beacon", "HTTP %d", response->status_code);
+                        return;
+                      }
+                      json::parse_json(body, [](JsonObject root) -> bool {
+                        // --- Commands ---------------------------------------
+                        for (JsonVariant c : root["commands"].as<JsonArray>()) {
+                          const char *kind = c.as<const char *>();
+                          if (kind == nullptr) continue;
+                          if (strcmp(kind, "trigger") == 0) {
+                            // Arm, do not act. The next inference is at most
+                            // ~1s away (detection_interval_ms), and reporting
+                            // from there is what gives the sighting a real
+                            // confidence value and a frame to upload.
+                            id(force_report) = true;
+                            id(force_report_until) = millis() + 30000;
+                            ESP_LOGI("beacon", "trigger: forcing next report");
+                          } else if (strcmp(kind, "restart") == 0) {
+                            ESP_LOGI("beacon", "restart requested");
+                            App.safe_reboot();
+                          }
+                        }
+
+                        // --- Config -----------------------------------------
+                        // Present only when the server sees this device on an
+                        // older revision, so local edits made on this page or
+                        // in Home Assistant survive every steady-state beat.
+                        JsonVariant cfg = root["config"];
+                        if (!cfg.isNull()) {
+                          JsonObject c = cfg.as<JsonObject>();
+
+                          // Go through make_call rather than publish_state:
+                          // publish_state only changes what is DISPLAYED, and
+                          // the OV2640 register write lives in each control's
+                          // set_action, which only a call performs.
+                          auto set_num = [](number::Number *n, float want) {
+                            if (!std::isnan(n->state) &&
+                                fabsf(n->state - want) < 0.0005f) return;
+                            auto call = n->make_call();
+                            call.set_value(want);
+                            call.perform();
+                          };
+                          auto set_sw = [](switch_::Switch *sw, bool want) {
+                            if (sw->state == want) return;
+                            if (want) sw->turn_on(); else sw->turn_off();
+                          };
+
+                          // No `&` on the id(): ESPHome rewrites `id(x)` in a
+                          // lambda to the component POINTER (and `id(x).y` to
+                          // `x->y`), so &id(x) is a pointer-to-pointer and
+                          // fails to compile.
+                          //
+                          // `| current` means a key the server omitted leaves
+                          // the setting alone instead of zeroing it.
+                          set_num(id(min_confidence),  c["min_confidence"]  | id(min_confidence).state);
+                          set_num(id(capture_interval), c["capture_interval"] | id(capture_interval).state);
+                          set_num(id(cam_brightness),  c["brightness"]      | id(cam_brightness).state);
+                          set_num(id(cam_contrast),    c["contrast"]        | id(cam_contrast).state);
+                          set_num(id(cam_saturation),  c["saturation"]      | id(cam_saturation).state);
+                          set_num(id(cam_ae_level),    c["ae_level"]        | id(cam_ae_level).state);
+                          set_sw(id(detection_enabled), c["detection_enabled"] | id(detection_enabled).state);
+                          set_sw(id(snapshot_uploads),  c["snapshot_uploads"]  | id(snapshot_uploads).state);
+                          set_sw(id(capture_mode),      c["capture_mode"]      | id(capture_mode).state);
+
+                          ESP_LOGI("beacon", "applied config rev %d",
+                                   (int) (root["config_rev"] | -1));
+                        }
+                        id(applied_config_rev) = root["config_rev"] | -1;
+                        return true;
+                      });
+                on_error:
+                  - logger.log:
+                      level: WARN
+                      format: "Beacon POST failed"
+
 binary_sensor:
   - platform: template
     id: bird_detected
@@ -483,8 +684,12 @@ sensor:
       sorting_group_id: group_detection
       sorting_weight: 2
   - platform: wifi_signal
+    id: wifi_rssi
     name: WiFi Signal
-    update_interval: 60s
+    # 30s, not the old 60s: the beacon reads this sensor's last published
+    # value, so a 60s interval meant five of every six beats reported a stale
+    # RSSI. Still cheap — it is a register read, not a scan.
+    update_interval: 30s
     entity_category: diagnostic
     web_server:
       sorting_group_id: group_diagnostic
@@ -496,11 +701,41 @@ sensor:
       sorting_group_id: group_diagnostic
       sorting_weight: 2
   - platform: internal_temperature
+    id: internal_temp
     name: Internal Temperature
     entity_category: diagnostic
     web_server:
       sorting_group_id: group_diagnostic
       sorting_weight: 3
+
+  # Fed to the beacon. `internal: true` on the two the dashboard already
+  # covers elsewhere would hide them from the device page too, so they stay
+  # visible — they are genuinely useful there when diagnosing a crash loop.
+  - platform: debug
+    free:
+      id: heap_free
+      name: Heap Free
+      web_server:
+        sorting_group_id: group_diagnostic
+        sorting_weight: 5
+    block:
+      id: heap_block
+      name: Heap Largest Block
+      web_server:
+        sorting_group_id: group_diagnostic
+        sorting_weight: 6
+    psram:
+      id: psram_free
+      name: PSRAM Free
+      web_server:
+        sorting_group_id: group_diagnostic
+        sorting_weight: 7
+    loop_time:
+      id: loop_time
+      name: Loop Time
+      web_server:
+        sorting_group_id: group_diagnostic
+        sorting_weight: 8
 
 # --- Runtime tuning ---------------------------------------------------------
 # Everything here is optimistic + restore_value, so a setting survives a
@@ -863,6 +1098,21 @@ button:
     web_server:
       sorting_group_id: group_detection
       sorting_weight: 6
+
+  # Local twin of the UI's "trigger" command, so the path can be exercised
+  # from this page without a round trip through Convex.
+  - platform: template
+    name: Force Sighting Now
+    icon: mdi:cloud-arrow-up
+    on_press:
+      - lambda: |-
+          id(force_report) = true;
+          id(force_report_until) = millis() + 30000;
+      - vision.inference:
+          id: bird_vision
+    web_server:
+      sorting_group_id: group_detection
+      sorting_weight: 7
 
   - platform: template
     name: Reapply Camera Settings

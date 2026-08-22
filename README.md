@@ -238,6 +238,94 @@ automatically.
 The dashboard config dir is still a **separate copy** of everything —
 `bird-cam.yaml` and `models/` have to be synced to it.
 
+## The beacon: remote stats and control
+
+The web UI can see each camera's telemetry and drive its settings, and there is
+a "Trigger a sighting" button that makes the camera report whatever it can see
+right now. All of it runs over **one POST every 10 seconds** from the device to
+the Convex `/beacon` HTTP action.
+
+That shape is forced by the network, not chosen for elegance. The camera sits on
+a home LAN behind NAT with no inbound path, so Convex can never call it. Every
+exchange has to be device-initiated. The beacon therefore carries telemetry up
+*and* takes any queued command plus the desired configuration back down in its
+own response body — one request, both directions.
+
+```
+device  --POST {uptime, rssi, heap, inferences, settings, config_rev}-->  Convex
+device  <--{commands: ["trigger"], config_rev, config: {...} | null}----  Convex
+```
+
+**Why not MQTT**, which would push commands instantly instead of within 10s:
+
+- Convex is stateless and HTTP-only, so it cannot hold a broker subscription.
+  MQTT would mean running a bridge process 24/7 purely to translate, which
+  throws away the serverless property of everything else here.
+- An MQTT client and its TLS session is another permanent internal-RAM
+  allocation on a board that already boot-loops with `std::bad_alloc` when
+  internal RAM runs short (see [OTA and snapshot size](#ota-and-snapshot-size)).
+
+A 10-second worst-case button latency is a good trade for neither of those. If
+you already run Mosquitto or Home Assistant on the same LAN, the calculus
+changes — the commented MQTT block at the bottom of the YAML is the starting
+point.
+
+**Why 10s.** Each beat costs ~2 Convex function calls, so 10s is ~520k calls per
+month for one camera against a 1M free-tier budget. Raise `interval:` in the
+YAML to 30s (~173k/month) if quota matters more than button latency.
+
+### Configuration, and who wins
+
+`deviceConfig.rev` is what stops the cloud from stomping on local changes. The
+device applies the payload only when the revision differs from the one it last
+applied, so a slider moved on the device's own page or in Home Assistant sticks
+until someone deliberately changes it in the UI. On boot the device reports
+`config_rev: -1`, which forces exactly one config pull — a device that came back
+from a crash cannot sit indefinitely on settings nobody chose.
+
+The first time a device is seen, its config row is **seeded from what the device
+reported**. Inventing server-side defaults would have pushed a configuration
+change at every new camera the first time it phoned home.
+
+The UI renders the *requested* value and marks any control the device has not
+yet echoed back, rather than rendering device truth — otherwise every toggle
+visibly snapped back for up to 10 seconds and read as a click that failed.
+
+Settings driven from the UI are a deliberate subset: min confidence, the three
+detection switches, capture interval, and brightness/contrast/saturation/AE
+level. White balance, special effect, gain ceiling and the manual exposure and
+gain pair stay device-local — they are set-once-and-forget, and every field
+costs bytes in a response that has to fit the device's 2 kB buffer.
+
+### Triggering a sighting
+
+The button queues a `trigger` command; the device collects it on its next beacon
+and arms a flag that makes the **next inference** report regardless of
+confidence. Two things follow from that:
+
+- It reports at most ~1s after the beacon collects it (`detection_interval_ms`),
+  not instantly.
+- The sighting only gets a photo if the model produced at least one raw box, as
+  `on_detection_image` never fires otherwise. A forced report on a genuinely
+  empty frame is logged without a portrait.
+- While `report_bird` is in its 30s cooldown the trigger is dropped, because
+  that script is `mode: single`.
+
+A forced sighting runs the paid species-ID pass like any other. Capture mode
+suppresses it entirely, so collection runs stay free.
+
+`Force Sighting Now` on the device's own page does the same thing without the
+round trip.
+
+### Retiring a camera
+
+`deviceStatus` / `deviceConfig` rows are keyed by device name and outlive the
+hardware. To drop one:
+
+```bash
+npx convex run maintenance:forgetDevice '{"device":"bird-cam-1"}'
+```
+
 ## Device control page
 
 The device serves its own control page at `http://bird-cam-1.local/` (ESPHome
@@ -246,11 +334,11 @@ same entities appear automatically in Home Assistant over the native API:
 
 | Group | Controls |
 |-------|----------|
-| Detection | Min Confidence, Detection Enabled, Snapshot Uploads, Run Inference Now, Bird Detected, Bird Confidence |
+| Detection | Min Confidence, Detection Enabled, Snapshot Uploads, Run Inference Now, Force Sighting Now, Bird Detected, Bird Confidence |
 | Image | Brightness, Contrast, Saturation, White Balance, Special Effect, Reapply Camera Settings |
 | Exposure & Gain | Auto Exposure, AEC DSP, AE Level, Manual Exposure, Auto Gain, Manual Gain, Gain Ceiling |
 | Orientation | Vertical Flip, Horizontal Mirror |
-| Diagnostics | WiFi Signal, Uptime, Internal Temperature, Restart |
+| Diagnostics | WiFi Signal, Uptime, Internal Temperature, Heap Free, Heap Largest Block, PSRAM Free, Loop Time, Restart |
 
 Every setting is `restore_value`, and an `on_boot` script re-applies the
 restored values to the OV2640 (a restored slider position otherwise only

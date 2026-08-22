@@ -6,6 +6,7 @@ import { api } from "../../convex/_generated/api";
 import TestUpload from "./TestUpload";
 import Calendar from "./Calendar";
 import Reports from "./Reports";
+import Devices from "./Devices";
 import { dayBoundsMs, formatDayKey, localDayKey } from "./dateUtils";
 
 type Detection = NonNullable<
@@ -316,6 +317,8 @@ export default function App() {
       </header>
 
       <TestUpload />
+
+      <Devices />
 
       <section className="logbook">
         <Calendar counts={dayCounts} selected={selectedDay} onSelect={setSelectedDay} />

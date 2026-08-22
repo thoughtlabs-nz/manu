@@ -794,3 +794,300 @@ body {
   font-variant-numeric: tabular-nums;
   opacity: 0.72;
 }
+
+/* --- The hide: live camera telemetry + control ---------------------------- */
+
+.devices {
+  margin-top: 2.2rem;
+  animation: rise 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: 80ms;
+}
+
+.devices-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.9rem;
+}
+
+.devices-head h2 {
+  font-size: 1.15rem;
+  font-style: italic;
+  font-weight: 600;
+}
+
+.devices-note {
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  color: var(--ink-soft);
+}
+
+.devices-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 1.2rem;
+}
+
+.device {
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  padding: 1rem 1.1rem 1.2rem;
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.device.offline {
+  opacity: 0.62;
+}
+
+.dev-head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  border-bottom: 1px solid var(--hairline);
+  padding-bottom: 0.6rem;
+}
+
+/* The enclosure render. Transparent PNG, so it sits straight on the paper
+   with no plate behind it. */
+.dev-render {
+  width: 62px;
+  height: auto;
+  flex: none;
+  filter: drop-shadow(0 6px 10px rgba(34, 48, 31, 0.22));
+}
+
+.device.offline .dev-render {
+  filter: grayscale(0.7) drop-shadow(0 4px 8px rgba(34, 48, 31, 0.15));
+}
+
+.dev-ident {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.dev-name {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dev-name h3 {
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.dev-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--hairline);
+  flex: none;
+}
+
+.dev-dot.live {
+  background: var(--sage);
+  box-shadow: 0 0 0 0 rgba(138, 155, 120, 0.7);
+  animation: pulse 2.4s ease-out infinite;
+}
+
+@keyframes pulse {
+  70% { box-shadow: 0 0 0 7px rgba(138, 155, 120, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(138, 155, 120, 0); }
+}
+
+.dev-seen {
+  font-size: 0.68rem;
+  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+}
+
+.dev-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(84px, 1fr));
+  gap: 0.7rem 0.6rem;
+  padding: 0.9rem 0;
+}
+
+.dev-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.12rem;
+}
+
+.dev-stat-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.dev-stat-label {
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.dev-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  padding: 0.2rem 0 0.9rem;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.dev-btn {
+  font: inherit;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.dev-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.55);
+  border-color: var(--ink-soft);
+}
+
+.dev-btn.primary {
+  border-color: var(--rust);
+  color: var(--rust);
+}
+
+.dev-btn.primary:hover:not(:disabled) {
+  background: rgba(182, 80, 31, 0.1);
+}
+
+.dev-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.dev-flash {
+  font-size: 0.66rem;
+  letter-spacing: 0.04em;
+  color: var(--rust);
+  font-style: italic;
+}
+
+.dev-controls {
+  padding-top: 0.9rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.dev-toggles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.dev-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.68rem;
+  letter-spacing: 0.05em;
+  text-transform: lowercase;
+  padding: 0.28rem 0.6rem;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.dev-toggle.on {
+  border-color: var(--sage);
+  color: var(--ink);
+  background: rgba(138, 155, 120, 0.16);
+}
+
+.dev-toggle input {
+  accent-color: var(--sage);
+  cursor: pointer;
+}
+
+.dev-toggle:has(input:disabled) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.dev-warn {
+  font-size: 0.7rem;
+  line-height: 1.45;
+  color: var(--rust);
+  font-style: italic;
+}
+
+.dev-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.dev-control-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 0.66rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.dev-control-label em {
+  font-style: normal;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
+.dev-control input[type="range"] {
+  width: 100%;
+  accent-color: var(--rust);
+  cursor: pointer;
+}
+
+.dev-control input[type="range"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* A control the UI has changed but the camera has not yet echoed back. The
+   change is at most one beacon (10s) away; the marker is what stops the panel
+   from quietly claiming the hardware already agrees. */
+.dev-toggle.unconfirmed,
+.dev-control.unconfirmed .dev-control-label em {
+  color: var(--rust);
+}
+
+.dev-toggle.unconfirmed {
+  border-color: var(--rust);
+  border-style: dashed;
+  background: rgba(182, 80, 31, 0.08);
+}
+
+.dev-control.unconfirmed input[type="range"] {
+  accent-color: var(--rust);
+  opacity: 0.75;
+}
+
+.dev-control.unconfirmed .dev-control-label em::after {
+  content: " ·";
+  animation: unconfirmed-blink 1.4s steps(1, end) infinite;
+}
+
+@keyframes unconfirmed-blink {
+  50% { opacity: 0.2; }
+}

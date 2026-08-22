@@ -10,6 +10,7 @@
 
 import type * as captures from "../captures.js";
 import type * as detections from "../detections.js";
+import type * as devices from "../devices.js";
 import type * as http from "../http.js";
 import type * as llmUsage from "../llmUsage.js";
 import type * as maintenance from "../maintenance.js";
@@ -26,6 +27,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   captures: typeof captures;
   detections: typeof detections;
+  devices: typeof devices;
   http: typeof http;
   llmUsage: typeof llmUsage;
   maintenance: typeof maintenance;
