@@ -1150,3 +1150,201 @@ body {
 @keyframes unconfirmed-blink {
   50% { opacity: 0.2; }
 }
+
+/* --- The dispatch: outbound webhook settings ------------------------------ */
+
+.dispatch {
+  margin-top: 1.6rem;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.3);
+  padding: 1rem 1.1rem;
+  animation: rise 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: 100ms;
+}
+
+.dispatch-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.7rem;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.dispatch-head:focus-visible {
+  outline: 2px solid var(--rust);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.dispatch-head h2 {
+  font-size: 1.15rem;
+  font-style: italic;
+  font-weight: 600;
+  flex: none;
+}
+
+.dispatch-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+  color: var(--ink-soft);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dispatch-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding-top: 1rem;
+  margin-top: 0.9rem;
+  border-top: 1px solid var(--hairline);
+}
+
+.dispatch-intro,
+.dispatch-hint {
+  font-size: 0.78rem;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  max-width: 62ch;
+}
+
+.dispatch-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-width: 46rem;
+}
+
+.dispatch-field > span {
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.dispatch-field input {
+  font: inherit;
+  font-size: 0.85rem;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.6);
+  color: var(--ink);
+}
+
+.dispatch-field input:focus-visible {
+  outline: none;
+  border-color: var(--rust);
+  box-shadow: 0 0 0 3px rgba(182, 80, 31, 0.12);
+}
+
+.dispatch-field small {
+  font-size: 0.68rem;
+  line-height: 1.5;
+  color: var(--ink-soft);
+}
+
+.dispatch-field code {
+  font-size: 0.92em;
+  background: rgba(34, 48, 31, 0.07);
+  padding: 0.05em 0.3em;
+  border-radius: 2px;
+}
+
+.dispatch-events {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.dispatch-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.dispatch-state {
+  font-size: 0.66rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.dispatch-state.on {
+  color: var(--sage);
+  font-weight: 600;
+}
+
+.dispatch-error,
+.dispatch-note,
+.dispatch-last {
+  font-size: 0.73rem;
+  line-height: 1.5;
+}
+
+.dispatch-error {
+  color: var(--rust);
+  font-weight: 600;
+}
+
+.dispatch-note {
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+.dispatch-last {
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 0.7rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 3px;
+  border-left: 2px solid var(--hairline);
+  background: rgba(255, 255, 255, 0.45);
+  color: var(--ink-soft);
+}
+
+.dispatch-last.ok {
+  border-left-color: var(--sage);
+}
+
+.dispatch-last.bad {
+  border-left-color: var(--rust);
+}
+
+.dispatch-last-error {
+  color: var(--rust);
+  word-break: break-word;
+}
+
+.dispatch-sample summary {
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.dispatch-sample pre {
+  margin-top: 0.5rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--hairline);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.5);
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+  font-size: 0.7rem;
+  line-height: 1.5;
+  overflow-x: auto;
+}

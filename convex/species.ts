@@ -187,6 +187,16 @@ export const recordResult = internalMutation({
       ...(confidence !== undefined ? { speciesConfidence: confidence } : {}),
       ...(cost !== undefined ? { speciesCost: cost } : {}),
     });
+
+    // Only a successful identification is worth dispatching: this is the one
+    // moment the sighting has a name AND a photo. A failed ID would send a
+    // payload no better than the detection event already sent.
+    if (status === "done") {
+      await ctx.scheduler.runAfter(0, internal.webhooks.deliver, {
+        event: "species_identified",
+        detectionId,
+      });
+    }
   },
 });
 

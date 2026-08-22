@@ -17,6 +17,7 @@ import type * as maintenance from "../maintenance.js";
 import type * as snapshots from "../snapshots.js";
 import type * as species from "../species.js";
 import type * as testUpload from "../testUpload.js";
+import type * as webhooks from "../webhooks.js";
 
 import type {
   ApiFromModules,
@@ -34,6 +35,7 @@ declare const fullApi: ApiFromModules<{
   snapshots: typeof snapshots;
   species: typeof species;
   testUpload: typeof testUpload;
+  webhooks: typeof webhooks;
 }>;
 
 /**

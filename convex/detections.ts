@@ -1,5 +1,6 @@
 import { internalMutation, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
 import type { QueryCtx } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
 
@@ -21,10 +22,23 @@ export const ingest = internalMutation({
     deviceTs: v.number(),
   },
   handler: async (ctx, args) => {
-    return await ctx.db.insert("detections", {
+    const detectionId = await ctx.db.insert("detections", {
       ...args,
       receivedAt: Date.now(),
     });
+
+    // Fires immediately, so this payload has no species and usually no photo
+    // yet — the snapshot arrives on a separate request moments later. The
+    // relay that wants a named bird with a picture should listen for
+    // species_identified instead. Scheduled rather than awaited because a
+    // mutation cannot make outbound requests, and because a slow or dead
+    // webhook must never delay ingesting a sighting.
+    await ctx.scheduler.runAfter(0, internal.webhooks.deliver, {
+      event: "detection",
+      detectionId,
+    });
+
+    return detectionId;
   },
 });
 

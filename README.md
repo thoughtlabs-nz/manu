@@ -331,6 +331,69 @@ hardware. To drop one:
 npx convex run maintenance:forgetDevice '{"device":"bird-cam-1"}'
 ```
 
+## The dispatch: outbound webhook
+
+Every sighting can be POSTed to a URL of your choosing, configured from the web
+UI under **The dispatch** — no redeploy, no env var. Intended for a relay like
+n8n that does the routing (push notification, Slack, a spreadsheet) from there.
+
+There is deliberately **no filtering here**. The payload carries confidence,
+species and device, so deciding that a 42%-confidence "Unknown bird" does not
+deserve a phone buzz belongs in whatever receives it. That is what the relay is
+for; duplicating it here would be two places to change one rule.
+
+Two events fire, each independently toggleable:
+
+| Event | When | Carries |
+|-------|------|---------|
+| `detection` | the instant the camera reports | device, confidence, object count — **no species, usually no photo** |
+| `species_identified` | seconds later, after the (paid) ID succeeds | the above plus common/scientific name, ID confidence, cost, and a snapshot URL |
+
+The snapshot arrives on a separate request from the detection, so a `detection`
+payload almost always has `snapshotUrl: null`. Most relays want
+`species_identified`. A failed identification does not fire it — the payload
+would be no better than the `detection` already sent.
+
+```json
+{
+  "event": "species_identified",
+  "sentAt": "2026-08-22T02:31:07.412Z",
+  "detectionId": "j57a...",
+  "device": "bird-cam-1",
+  "confidence": 0.42,
+  "objectCount": 1,
+  "detectedAt": "2026-08-22T02:31:02.881Z",
+  "snapshotUrl": "https://....convex.cloud/...",
+  "species": {
+    "commonName": "New Zealand Fantail",
+    "scientificName": "Rhipidura fuliginosa",
+    "confidence": 0.91,
+    "cost": 0.0021
+  }
+}
+```
+
+Field names are the contract — n8n expressions are written against them, so
+renaming one breaks someone's workflow.
+
+Delivery is fire-and-forget: scheduled as an action (a mutation cannot make
+outbound requests), 10s timeout, single attempt, and **failures are recorded
+rather than thrown** so a dead relay can never block ingesting a sighting. The
+last status, event and error are shown in the panel, which is the only practical
+way to tell a misconfigured URL from a silent one.
+
+An optional shared secret is sent as `X-Manu-Secret`. It is write-only — the
+config query returns `hasSecret`, never the value.
+
+### Why the URL is validated
+
+A user-supplied URL that the *server* fetches is an SSRF vector, and this app has
+no login, so that field is effectively public input. `webhooks.save` requires
+https (a secret in clear text over http is not a secret) and rejects loopback,
+link-local and RFC1918 hosts. The last one is also just true: Convex runs in the
+cloud and cannot reach your LAN, so an n8n on `192.168.x.x` needs to be exposed
+properly — a tunnel or a public host — not pointed at directly.
+
 ## Device control page
 
 The device serves its own control page at `http://bird-cam-1.local/` (ESPHome

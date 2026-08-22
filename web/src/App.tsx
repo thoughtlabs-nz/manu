@@ -7,6 +7,7 @@ import TestUpload from "./TestUpload";
 import Calendar from "./Calendar";
 import Reports from "./Reports";
 import Devices from "./Devices";
+import Dispatch from "./Dispatch";
 import { dayBoundsMs, formatDayKey, localDayKey } from "./dateUtils";
 
 type Detection = NonNullable<
@@ -319,6 +320,8 @@ export default function App() {
       <TestUpload />
 
       <Devices />
+
+      <Dispatch />
 
       <section className="logbook">
         <Calendar counts={dayCounts} selected={selectedDay} onSelect={setSelectedDay} />

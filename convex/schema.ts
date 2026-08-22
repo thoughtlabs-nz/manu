@@ -148,6 +148,37 @@ export default defineSchema({
     claimedAt: v.optional(v.number()),
   }).index("by_device_status", ["device", "status", "createdAt"]),
 
+  // --- Outbound webhook -------------------------------------------------------
+  //
+  // A single generic POST target, on the assumption that whatever receives it
+  // (n8n, Zapier, a script) is the router. That is why there is one URL and no
+  // filtering here beyond which events fire: the payload carries confidence,
+  // species and device, and deciding what to do with a 42%-confidence sparrow
+  // is the relay's job, not this table's.
+  //
+  // Singleton by convention — `save` patches the first row rather than
+  // inserting. A table rather than an env var because it has to be editable
+  // from the UI without a redeploy.
+  webhook: defineTable({
+    enabled: v.boolean(),
+    url: v.string(),
+    // Sent as X-Manu-Secret so the receiver can reject anything that did not
+    // come from here. Write-only: never returned to the client.
+    secret: v.optional(v.string()),
+    // Which moments fire. Both are useful and mean different things: a
+    // detection is immediate but knows nothing about species and has no photo
+    // yet, while the species event lands seconds later with both.
+    onDetection: v.boolean(),
+    onSpeciesIdentified: v.boolean(),
+    // Last delivery outcome, so the UI can show whether the endpoint is
+    // actually reachable. Wiring up a relay is otherwise pure guesswork.
+    lastStatus: v.optional(v.number()),
+    lastAt: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+    lastEvent: v.optional(v.string()),
+    updatedAt: v.number(),
+  }),
+
   snapshots: defineTable({
     device: v.string(),
     deviceTs: v.number(),
