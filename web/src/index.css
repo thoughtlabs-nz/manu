@@ -836,27 +836,86 @@ body {
   border-radius: 4px;
   padding: 1rem 1.1rem 1.2rem;
   background: rgba(255, 255, 255, 0.3);
+  transition: border-color 0.15s ease;
+}
+
+.device:has(.dev-head[aria-expanded="false"]) {
+  padding-bottom: 1rem;
+}
+
+.device:has(.dev-head:hover) {
+  border-color: var(--ink-soft);
 }
 
 .device.offline {
   opacity: 0.62;
 }
 
+/* The header is a <button>, so the browser defaults have to be undone before
+   it can look like a header again. */
 .dev-head {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  width: 100%;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: none;
   border-bottom: 1px solid var(--hairline);
-  padding-bottom: 0.6rem;
+  padding: 0 0 0.6rem;
+  cursor: pointer;
+}
+
+.dev-head:focus-visible {
+  outline: 2px solid var(--rust);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+/* Collapsed, the header IS the card, so it should not keep a rule under it. */
+.device:has(.dev-head[aria-expanded="false"]) .dev-head {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.dev-chevron {
+  margin-left: auto;
+  flex: none;
+  font-size: 1.1rem;
+  line-height: 1;
+  color: var(--ink-soft);
+  transition: color 0.15s ease;
+}
+
+.dev-head:hover .dev-chevron {
+  color: var(--rust);
+}
+
+/* A change the camera has not caught up on yet. Deliberately loud enough to
+   read at a glance on a collapsed card. */
+.dev-waiting {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--rust);
+  flex: none;
+  animation: unconfirmed-blink 1.4s steps(1, end) infinite;
 }
 
 /* The enclosure render. Transparent PNG, so it sits straight on the paper
    with no plate behind it. */
 .dev-render {
   width: 62px;
+  transition: width 0.18s ease;
   height: auto;
   flex: none;
   filter: drop-shadow(0 6px 10px rgba(34, 48, 31, 0.22));
+}
+
+.device:has(.dev-head[aria-expanded="false"]) .dev-render {
+  width: 44px;
 }
 
 .device.offline .dev-render {

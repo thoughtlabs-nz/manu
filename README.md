@@ -291,6 +291,11 @@ The UI renders the *requested* value and marks any control the device has not
 yet echoed back, rather than rendering device truth — otherwise every toggle
 visibly snapped back for up to 10 seconds and read as a click that failed.
 
+Every camera that has beaconed gets its own card, collapsed by default and
+remembered per device in `localStorage`. A collapsed card still carries uptime,
+inference rate and signal in its header, plus a marker for anything the camera
+has not caught up on, so minimising one never hides a change still in flight.
+
 Settings driven from the UI are a deliberate subset: min confidence, the three
 detection switches, capture interval, and brightness/contrast/saturation/AE
 level. White balance, special effect, gain ceiling and the manual exposure and

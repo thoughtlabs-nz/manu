@@ -40,6 +40,32 @@ function rate(inferences: number, uptime: number): string {
   return `${(inferences / uptime).toFixed(2)}/s`;
 }
 
+// Which cards are expanded, remembered per device across reloads. Cameras are
+// long-lived and mostly uninteresting once tuned, so the panel opens collapsed
+// and stays however you left it.
+const OPEN_KEY = "manu.hide.open";
+
+function readOpen(device: string): boolean {
+  try {
+    const raw = window.localStorage.getItem(OPEN_KEY);
+    return raw ? Boolean(JSON.parse(raw)[device]) : false;
+  } catch {
+    return false;
+  }
+}
+
+function writeOpen(device: string, open: boolean) {
+  try {
+    const raw = window.localStorage.getItem(OPEN_KEY);
+    const all = raw ? JSON.parse(raw) : {};
+    all[device] = open;
+    window.localStorage.setItem(OPEN_KEY, JSON.stringify(all));
+  } catch {
+    // A blocked or full localStorage should cost the memory of the choice,
+    // never the ability to open the card.
+  }
+}
+
 function Stat({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
     <div className="dev-stat" title={title}>
@@ -143,6 +169,15 @@ function DeviceCard({ d }: { d: Device }) {
   const sendCommand = useMutation(api.devices.sendCommand);
   const updateConfig = useMutation(api.devices.updateConfig);
 
+  const [open, setOpen] = useState(() => readOpen(d.device));
+
+  function toggleOpen() {
+    setOpen((wasOpen) => {
+      writeOpen(d.device, !wasOpen);
+      return !wasOpen;
+    });
+  }
+
   // Nothing reaches the camera except on its next beacon, so a press has no
   // visible effect for up to 10s. Without this the button feels broken and
   // gets pressed again.
@@ -178,9 +213,30 @@ function DeviceCard({ d }: { d: Device }) {
   const offline = !d.online;
   const unconfirmed = (key: keyof Settings) => d.desired[key] !== d.reported[key];
 
+  // Anything the camera owes us: a queued command, or a setting it has not yet
+  // echoed back. Surfaced in the header so collapsing a card never hides the
+  // fact that a change is still in flight.
+  const unconfirmedCount = (Object.keys(d.reported) as (keyof Settings)[]).filter(
+    unconfirmed
+  ).length;
+  const waiting = unconfirmedCount > 0 || d.queuedCommands.length > 0;
+  const waitingLabel = [
+    d.queuedCommands.length ? `${d.queuedCommands.join(", ")} queued` : null,
+    unconfirmedCount ? `${unconfirmedCount} setting(s) not yet applied` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
     <article className={`device${offline ? " offline" : ""}`}>
-      <header className="dev-head">
+      {/* The whole header is the disclosure control. A card is a physical
+          camera and there may be several, so the default is collapsed. */}
+      <button
+        type="button"
+        className="dev-head"
+        aria-expanded={open}
+        onClick={toggleOpen}
+      >
         {/* The enclosure this camera actually lives in, so the panel reads as
             a particular object in the garden rather than a row in a table. */}
         <img className="dev-render" src={birdhouse} alt="" aria-hidden="true" />
@@ -188,14 +244,35 @@ function DeviceCard({ d }: { d: Device }) {
           <div className="dev-name">
             <span className={`dev-dot${d.online ? " live" : ""}`} />
             <h3>{d.device}</h3>
+            {/* Anything the camera has not yet caught up on has to stay
+                visible while collapsed, or a queued change looks like it was
+                never made. */}
+            {waiting ? <span className="dev-waiting" title={waitingLabel} /> : null}
           </div>
           <span className="dev-seen">
             {d.online
               ? `beacon ${ago(d.receivedAt)}`
               : `silent since ${ago(d.receivedAt)}`}
+            {/* Collapsed, the header is the only thing on screen, so it
+                carries the three numbers worth glancing at. */}
+            {!open ? (
+              <>
+                {" · "}
+                {duration(d.uptime)}
+                {" · "}
+                {rate(d.inferences, d.uptime)}
+                {d.rssi ? ` · ${d.rssi} dBm` : ""}
+              </>
+            ) : null}
           </span>
         </div>
-      </header>
+        <span className="dev-chevron" aria-hidden="true">
+          {open ? "\u2212" : "+"}
+        </span>
+      </button>
+
+      {open ? (
+      <>
 
       <div className="dev-stats">
         <Stat label="uptime" value={duration(d.uptime)} />
@@ -342,6 +419,8 @@ function DeviceCard({ d }: { d: Device }) {
           onCommit={(v) => set({ aeLevel: v })}
         />
       </div>
+      </>
+      ) : null}
     </article>
   );
 }
@@ -354,13 +433,15 @@ export default function Devices() {
   // not been flashed with the beacon build yet.
   if (!devices || devices.length === 0) return null;
 
+  const many = devices.length > 1;
+
   return (
     <section className="devices">
       <div className="devices-head">
-        <h2>The hide</h2>
+        <h2>{many ? "The hides" : "The hide"}</h2>
         <span className="devices-note">
-          every camera reports in every 10 seconds · commands ride back on the
-          next report
+          {many ? "every camera reports in" : "reports in"} every 10 seconds ·
+          commands ride back on the next report
         </span>
       </div>
       <div className="devices-grid">
